@@ -82,19 +82,19 @@ class ASAPAnnotation(Annotation):
         geojson = GeoJSONAnnotation()
 
         for region in self.regions:
+            if len(region.coordinates) < 3:
+                continue
+
+            coords_list = [coord.to_list() for coord in region.coordinates]
+
+            if coords_list[0] != coords_list[-1]:
+                coords_list.append(coords_list[0])
+
             feature = {
                 "type": "Feature",
                 "id": region.guid,
-                "geometry": {
-                    "type": region.region_type,
-                    "coordinates": [[coord.to_list() for coord in region.coordinates]],
-                },
-                "properties": {
-                    "objectType": "annotation",
-                    "name": region.name,
-                    "color": region.color,
-                    "group": region.group,
-                },
+                "geometry": {"type": region.region_type, "coordinates": [coords_list]},
+                "properties": {"objectType": "annotation"},
             }
 
             geojson.features.append(feature)
@@ -148,12 +148,15 @@ class GeoJSONAnnotation(Annotation):
                 region = Region(
                     name=name,
                     region_type="Polygon",
-                    color=properties.get("color", "#F4FA58"),
-                    group=properties.get("group", "None"),
+                    color="#F4FA58",
+                    group="None",
                     guid=feature.get("id", str(uuid.uuid4())),
                 )
 
                 coord_list = feature["geometry"]["coordinates"][0]
+                if len(coord_list) > 1 and coord_list[0] == coord_list[-1]:
+                    coord_list = coord_list[:-1]
+
                 for x, y in coord_list:
                     region.add_coordinate(x, y)
 
@@ -205,13 +208,15 @@ class HistechAnnotation(Annotation):
             color = anno_elem.get("color_bgr", "")
             guid = anno_elem.get("guid", "")
 
-            if color and color.startswith("FF"):
-                try:
+            try:
+                if color and color.startswith("FF") and len(color) >= 8:
                     bgr = color[2:]
                     rgb = bgr[4:6] + bgr[2:4] + bgr[0:2]
                     color = f"#{rgb}"
-                except:
+                elif not color or not color.startswith("#") or len(color) != 7:
                     color = "#F4FA58"
+            except:
+                color = "#F4FA58"
 
             region = Region(name=name, region_type="Polygon", color=color, guid=guid)
 

@@ -14,11 +14,11 @@ config = ConverterConfig(
 
 converter = Annovert(config)
 
-results = converter.batch_process(
-    input_dir=Path(input_dir), file_pattern="*.geojson", target_format="asap"
-)
-
-# converter.convert_file(
-#     Path(input_dir) / "example.xml",
-#     Path(output_dir) / "example.geojson"
+# results = converter.batch_process(
+#     input_dir=Path(input_dir), file_pattern="*.xml", target_format="geojson"
 # )
+
+
+converter.convert_file(
+    "annotation_asap.xml", "annotation_geojson.geojson", target_format="geojson"
+)
