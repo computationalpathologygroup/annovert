@@ -90,11 +90,27 @@ class ASAPAnnotation(Annotation):
             if coords_list[0] != coords_list[-1]:
                 coords_list.append(coords_list[0])
 
+            # Create properties dictionary with all relevant metadata
+            properties = {
+                "objectType": "annotation",
+                "name": region.name,
+                "type": region.region_type,
+                "source": "asap_xml"
+            }
+            
+            # Add group info if present
+            if region.group and region.group != "None":
+                properties["group"] = region.group
+                
+            # Add color if present
+            if region.color:
+                properties["color"] = region.color
+
             feature = {
                 "type": "Feature",
                 "id": region.guid,
                 "geometry": {"type": region.region_type, "coordinates": [coords_list]},
-                "properties": {"objectType": "annotation"},
+                "properties": properties,
             }
 
             geojson.features.append(feature)
@@ -143,13 +159,19 @@ class GeoJSONAnnotation(Annotation):
         for feature in self.features:
             if feature["geometry"]["type"] == "Polygon":
                 properties = feature.get("properties", {})
+                
+                # Get properties with fallbacks
                 name = properties.get("name", "Region")
-
+                region_type = properties.get("type", "Polygon")
+                color = properties.get("color", "#F4FA58")
+                group = properties.get("group", "None")
+                
+                # Create region with all available metadata
                 region = Region(
                     name=name,
-                    region_type="Polygon",
-                    color="#F4FA58",
-                    group="None",
+                    region_type=region_type,
+                    color=color,
+                    group=group,
                     guid=feature.get("id", str(uuid.uuid4())),
                 )
 
