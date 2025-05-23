@@ -3,7 +3,9 @@ import uuid
 from pathlib import Path
 from typing import Dict, List, Literal, Optional, Tuple, Union
 
-FormatType = Literal["asap", "geojson", "3dhistech", "geojson_qupath_mrxs"]
+FormatType = Literal[
+    "asap", "geojson", "3dhistech", "geojson_qupath_mrxs", "binary_mask"
+]
 
 
 class ImageMetadata:
@@ -61,6 +63,7 @@ class Region:
         color: str = None,
         group: str = None,
         guid: str = None,
+        label_value: int = 1,
     ):
         self.name = name
         self.region_type = region_type
@@ -68,6 +71,7 @@ class Region:
         self.color = color
         self.group = group
         self.guid = guid or str(uuid.uuid4())
+        self.label_value = label_value
 
     def __repr__(self):
         return f"Region(name='{self.name}', type='{self.region_type}', coordinates={len(self.coordinates)})"
@@ -107,10 +111,14 @@ class ConverterConfig:
         default_source_format: Optional[FormatType] = None,
         default_target_format: Optional[FormatType] = None,
         output_directory: Optional[Union[str, Path]] = None,
+        mask_downsample_factor: float = 1.0,
+        default_label_value: int = 1,
     ):
         self.allow_auto_detect = allow_auto_detect
         self.default_source_format = default_source_format
         self.default_target_format = default_target_format
+        self.mask_downsample_factor = mask_downsample_factor
+        self.default_label_value = default_label_value
 
         if output_directory:
             self.output_directory = Path(output_directory)

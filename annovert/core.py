@@ -5,7 +5,12 @@ import logging
 from tqdm import tqdm
 
 from .basecore import Annotation, ConverterConfig, FormatType, ImageMetadata
-from .formats import ASAPAnnotation, GeoJSONAnnotation, HistechAnnotation
+from .formats import (
+    ASAPAnnotation,
+    GeoJSONAnnotation,
+    HistechAnnotation,
+    BinaryMaskAnnotation,
+)
 
 
 class ConversionLogger:
@@ -65,6 +70,8 @@ class Annovert:
                         )
                 except ET.ParseError:
                     raise ValueError("Invalid XML format")
+        elif suffix in [".tif", ".tiff"]:
+            return "binary_mask"
         else:
             raise ValueError(
                 f"Cannot determine annotation format from file: {file_path}"
@@ -77,6 +84,7 @@ class Annovert:
         source_format: Optional[FormatType] = None,
         target_format: Optional[FormatType] = None,
         image_path: Optional[Union[str, Path]] = None,
+        downsample_factor: Optional[float] = None,
     ) -> Any:
         input_path = Path(input_path)
 
@@ -93,9 +101,9 @@ class Annovert:
                     f"Source format not specified and auto-detection disabled"
                 )
 
-        if target_format == "geojson_qupath_mrxs" and not image_path:
+        if target_format in ["geojson_qupath_mrxs", "binary_mask"] and not image_path:
             self.logger.warning(
-                f"Target format 'geojson_qupath_mrxs' requires image metadata. "
+                f"Target format '{target_format}' requires image metadata. "
                 f"Provide image_path parameter for optimal results."
             )
 
@@ -110,6 +118,8 @@ class Annovert:
                 annotation = QuPathMRXSGeoJSONAnnotation.from_string(f.read())
         elif source_format == "3dhistech":
             annotation = HistechAnnotation.from_file(input_path)
+        elif source_format == "binary_mask":
+            annotation = BinaryMaskAnnotation.from_file(input_path)
         else:
             raise ValueError(f"Unsupported source format: {source_format}")
 
@@ -123,6 +133,8 @@ class Annovert:
                         target_format = "geojson"
                 elif suffix == ".xml":
                     target_format = "asap"
+                elif suffix in [".tif", ".tiff", ".png", ".jpg", ".jpeg"]:
+                    target_format = "binary_mask"
                 else:
                     if self.config.default_target_format:
                         target_format = self.config.default_target_format
@@ -135,11 +147,9 @@ class Annovert:
             else:
                 raise ValueError("Target format not specified and cannot be determined")
         else:
-            # Validate target_format matches output_path extension (only for clear mismatches)
             if output_path:
                 suffix = Path(output_path).suffix.lower()
 
-                # Check for clear mismatches only
                 if (
                     target_format in ["geojson", "geojson_qupath_mrxs"]
                     and suffix == ".xml"
@@ -155,19 +165,38 @@ class Annovert:
                         f"Auto-correcting to 'geojson'"
                     )
                     target_format = "geojson"
+                elif target_format == "binary_mask" and suffix not in [
+                    ".tif",
+                    ".tiff",
+                    ".png",
+                    ".jpg",
+                    ".jpeg",
+                ]:
+                    self.logger.warning(
+                        f"Target format '{target_format}' doesn't match output extension '{suffix}'. "
+                        f"Consider using .tif, .png, or .jpg extension"
+                    )
 
         metadata = None
-        if target_format == "geojson_qupath_mrxs" and image_path:
+        if target_format in ["geojson_qupath_mrxs", "binary_mask"] and image_path:
             from .image_reader import ImageReader
 
             try:
-                metadata = ImageReader.read_mrxs_metadata(image_path)
+                metadata = ImageReader.read_image_metadata(image_path)
                 self.logger.info(f"Loaded image metadata: {Path(image_path).name}")
             except Exception as e:
                 self.logger.warning(f"Could not read image metadata: {e}")
 
+        if downsample_factor is None:
+            downsample_factor = self.config.mask_downsample_factor
+
         self.logger.info(f"Converting: {source_format} → {target_format}")
-        result = self.convert_object(annotation, target_format, metadata=metadata)
+        result = self.convert_object(
+            annotation,
+            target_format,
+            metadata=metadata,
+            downsample_factor=downsample_factor,
+        )
 
         if output_path:
             output_path = Path(output_path)
@@ -196,6 +225,7 @@ class Annovert:
         annotation,
         target_format: FormatType,
         metadata: Optional[ImageMetadata] = None,
+        downsample_factor: float = 1.0,
     ) -> Any:
         if isinstance(annotation, ASAPAnnotation):
             if target_format == "asap":
@@ -207,6 +237,11 @@ class Annovert:
 
                 base_geojson = annotation.to_geojson()
                 return QuPathMRXSGeoJSONAnnotation.from_geojson(base_geojson, metadata)
+            elif target_format == "binary_mask":
+                base_geojson = annotation.to_geojson()
+                return BinaryMaskAnnotation.from_geojson(
+                    base_geojson, metadata, downsample_factor
+                )
             else:
                 raise ValueError(f"Unsupported conversion from ASAP to {target_format}")
 
@@ -220,6 +255,11 @@ class Annovert:
                     return annotation.to_standard_geojson()
                 elif target_format == "geojson_qupath_mrxs":
                     return annotation
+                elif target_format == "binary_mask":
+                    standard_geojson = annotation.to_standard_geojson()
+                    return BinaryMaskAnnotation.from_geojson(
+                        standard_geojson, metadata, downsample_factor
+                    )
                 else:
                     raise ValueError(
                         f"Unsupported conversion from QuPath MRXS GeoJSON to {target_format}"
@@ -232,6 +272,10 @@ class Annovert:
                 elif target_format == "geojson_qupath_mrxs":
                     return QuPathMRXSGeoJSONAnnotation.from_geojson(
                         annotation, metadata
+                    )
+                elif target_format == "binary_mask":
+                    return BinaryMaskAnnotation.from_geojson(
+                        annotation, metadata, downsample_factor
                     )
                 else:
                     raise ValueError(
@@ -248,9 +292,31 @@ class Annovert:
 
                 base_geojson = annotation.to_geojson()
                 return QuPathMRXSGeoJSONAnnotation.from_geojson(base_geojson, metadata)
+            elif target_format == "binary_mask":
+                base_geojson = annotation.to_geojson()
+                return BinaryMaskAnnotation.from_geojson(
+                    base_geojson, metadata, downsample_factor
+                )
             else:
                 raise ValueError(
                     f"Unsupported conversion from 3D Histech to {target_format}"
+                )
+
+        elif isinstance(annotation, BinaryMaskAnnotation):
+            if target_format == "asap":
+                return annotation.to_asap()
+            elif target_format == "geojson":
+                return annotation.to_geojson()
+            elif target_format == "geojson_qupath_mrxs":
+                from .qupath_geojson import QuPathMRXSGeoJSONAnnotation
+
+                base_geojson = annotation.to_geojson()
+                return QuPathMRXSGeoJSONAnnotation.from_geojson(base_geojson, metadata)
+            elif target_format == "binary_mask":
+                return annotation
+            else:
+                raise ValueError(
+                    f"Unsupported conversion from Binary Mask to {target_format}"
                 )
 
         else:
@@ -264,6 +330,7 @@ class Annovert:
         target_format: Optional[FormatType] = None,
         file_pattern: str = "*.*",
         image_dir: Optional[Union[str, Path]] = None,
+        downsample_factor: Optional[float] = None,
     ) -> Dict[str, Any]:
         input_dir = Path(input_dir)
         if image_dir:
@@ -285,11 +352,13 @@ class Annovert:
             )
             return self.results
 
-        if target_format == "geojson_qupath_mrxs" and not image_dir:
-            raise ValueError(
-                "Target format 'geojson_qupath_mrxs' requires image_dir parameter. "
-                "Provide image directory or use 'geojson' format instead."
+        if target_format in ["geojson_qupath_mrxs", "binary_mask"] and not image_dir:
+            self.logger.warning(
+                f"Target format '{target_format}' requires image_dir parameter for optimal results."
             )
+
+        if downsample_factor is None:
+            downsample_factor = self.config.mask_downsample_factor
 
         self.logger.info(f"Input directory: {input_dir}")
         self.logger.info(f"Output directory: {output_dir}")
@@ -326,13 +395,20 @@ class Annovert:
                             continue
 
                     if curr_source_format:
-                        output_suffix = (
-                            ".xml" if target_format == "asap" else ".geojson"
-                        )
+                        if target_format == "asap":
+                            output_suffix = ".xml"
+                        elif target_format == "binary_mask":
+                            output_suffix = ".png"
+                        else:
+                            output_suffix = ".geojson"
+
                         output_file = output_dir / f"{input_file.stem}{output_suffix}"
 
                         image_path = None
-                        if target_format == "geojson_qupath_mrxs" and image_dir:
+                        if (
+                            target_format in ["geojson_qupath_mrxs", "binary_mask"]
+                            and image_dir
+                        ):
                             for ext in [
                                 ".mrxs",
                                 ".svs",
@@ -340,6 +416,8 @@ class Annovert:
                                 ".vms",
                                 ".vmu",
                                 ".scn",
+                                ".tif",
+                                ".tiff",
                             ]:
                                 candidate = image_dir / f"{input_file.stem}{ext}"
                                 if candidate.exists():
@@ -355,6 +433,7 @@ class Annovert:
                             source_format=curr_source_format,
                             target_format=target_format,
                             image_path=image_path,
+                            downsample_factor=downsample_factor,
                         )
 
                 except Exception as e:

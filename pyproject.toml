@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "annovert"
 version = "0.1.0"
-description = "Convert between digital pathology annotation formats (ASAP XML, GeoJSON, 3D Histech, QuPath MRXS)"
+description = "Convert between digital pathology annotation formats (ASAP XML, GeoJSON, 3D Histech, QuPath MRXS, Binary Masks)"
 readme = "README.md"
 requires-python = ">=3.7"
 
@@ -18,6 +18,8 @@ keywords = [
     "QuPath",
     "3D Histech",
     "MRXS",
+    "binary mask",
+    "segmentation",
     "pathology",
     "medical imaging"
 ]
@@ -39,11 +41,10 @@ classifiers = [
 ]
 
 dependencies = [
-    "tqdm"
-]
-
-[project.optional-dependencies]
-mrxs = [
+    "tqdm",
+    "rasterio",
+    "shapely", 
+    "numpy",
     "openslide-python",
     "openslide-bin"
 ]
@@ -51,6 +52,3 @@ mrxs = [
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["annovert*"]
-
-[tool.setuptools.package-data]
-annovert = ["py.typed"]
