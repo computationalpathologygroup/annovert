@@ -1,15 +1,38 @@
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Any, Dict, Optional, Union
+import logging
+from tqdm import tqdm
 
 from .basecore import Annotation, ConverterConfig, FormatType, ImageMetadata
 from .formats import ASAPAnnotation, GeoJSONAnnotation, HistechAnnotation
+
+
+class ConversionLogger:
+    def __init__(self, name: str = "annovert"):
+        self.logger = logging.getLogger(name)
+        if not self.logger.handlers:
+            handler = logging.StreamHandler()
+            formatter = logging.Formatter("%(name)s | %(levelname)s | %(message)s")
+            handler.setFormatter(formatter)
+            self.logger.addHandler(handler)
+            self.logger.setLevel(logging.INFO)
+
+    def info(self, message: str):
+        self.logger.info(message)
+
+    def warning(self, message: str):
+        self.logger.warning(message)
+
+    def error(self, message: str):
+        self.logger.error(message)
 
 
 class Annovert:
     def __init__(self, config: ConverterConfig = None):
         self.config = config or ConverterConfig()
         self.results = {}
+        self.logger = ConversionLogger()
 
     def _detect_format_from_path(self, file_path: Path) -> FormatType:
         suffix = file_path.suffix.lower()
@@ -57,15 +80,24 @@ class Annovert:
     ) -> Any:
         input_path = Path(input_path)
 
+        self.logger.info(f"Converting: {input_path}")
+
         if not source_format:
             if self.config.default_source_format:
                 source_format = self.config.default_source_format
             elif self.config.allow_auto_detect:
                 source_format = self._detect_format_from_path(input_path)
+                self.logger.info(f"Detected format: {source_format}")
             else:
                 raise ValueError(
                     f"Source format not specified and auto-detection disabled"
                 )
+
+        if target_format == "geojson_qupath_mrxs" and not image_path:
+            self.logger.warning(
+                f"Target format 'geojson_qupath_mrxs' requires image metadata. "
+                f"Provide image_path parameter for optimal results."
+            )
 
         if source_format == "asap":
             annotation = ASAPAnnotation.from_file(input_path)
@@ -102,21 +134,51 @@ class Annovert:
                 target_format = self.config.default_target_format
             else:
                 raise ValueError("Target format not specified and cannot be determined")
+        else:
+            # Validate target_format matches output_path extension (only for clear mismatches)
+            if output_path:
+                suffix = Path(output_path).suffix.lower()
+
+                # Check for clear mismatches only
+                if (
+                    target_format in ["geojson", "geojson_qupath_mrxs"]
+                    and suffix == ".xml"
+                ):
+                    self.logger.warning(
+                        f"Target format '{target_format}' doesn't match output extension '{suffix}'. "
+                        f"Auto-correcting to 'asap'"
+                    )
+                    target_format = "asap"
+                elif target_format == "asap" and suffix in [".geojson", ".json"]:
+                    self.logger.warning(
+                        f"Target format '{target_format}' doesn't match output extension '{suffix}'. "
+                        f"Auto-correcting to 'geojson'"
+                    )
+                    target_format = "geojson"
 
         metadata = None
         if target_format == "geojson_qupath_mrxs" and image_path:
             from .image_reader import ImageReader
 
-            metadata = ImageReader.read_mrxs_metadata(image_path)
+            try:
+                metadata = ImageReader.read_mrxs_metadata(image_path)
+                self.logger.info(f"Loaded image metadata: {Path(image_path).name}")
+            except Exception as e:
+                self.logger.warning(f"Could not read image metadata: {e}")
 
+        self.logger.info(f"Converting: {source_format} → {target_format}")
         result = self.convert_object(annotation, target_format, metadata=metadata)
 
         if output_path:
             output_path = Path(output_path)
+            output_path.parent.mkdir(parents=True, exist_ok=True)
             if hasattr(result, "save"):
                 result.save(output_path)
+                self.logger.info(f"✓ Saved to: {output_path}")
             else:
                 raise ValueError(f"Result does not have a save method: {type(result)}")
+        else:
+            self.logger.info("✓ Conversion completed (in-memory)")
 
         self.results[input_path.stem] = {
             "input_path": str(input_path),
@@ -217,51 +279,105 @@ class Annovert:
 
         input_files = list(input_dir.glob(file_pattern))
 
-        for input_file in input_files:
-            try:
-                curr_source_format = source_format
+        if not input_files:
+            self.logger.warning(
+                f"No files found matching '{file_pattern}' in {input_dir}"
+            )
+            return self.results
 
-                if not curr_source_format and self.config.allow_auto_detect:
-                    try:
-                        curr_source_format = self._detect_format_from_path(input_file)
-                    except ValueError:
-                        self.results[input_file.stem] = {
-                            "input_path": str(input_file),
-                            "source_format": None,
-                            "target_format": target_format,
-                            "output_path": None,
-                            "success": False,
-                            "error": "Could not auto-detect source format",
-                        }
-                        continue
+        if target_format == "geojson_qupath_mrxs" and not image_dir:
+            raise ValueError(
+                "Target format 'geojson_qupath_mrxs' requires image_dir parameter. "
+                "Provide image directory or use 'geojson' format instead."
+            )
 
-                if curr_source_format:
-                    output_suffix = ".xml" if target_format == "asap" else ".geojson"
-                    output_file = output_dir / f"{input_file.stem}{output_suffix}"
+        self.logger.info(f"Input directory: {input_dir}")
+        self.logger.info(f"Output directory: {output_dir}")
+        if image_dir:
+            self.logger.info(f"Image directory: {image_dir}")
 
-                    image_path = None
-                    if target_format == "geojson_qupath_mrxs" and image_dir:
-                        for ext in [".mrxs", ".svs", ".ndpi", ".vms", ".vmu", ".scn"]:
-                            candidate = image_dir / f"{input_file.stem}{ext}"
-                            if candidate.exists():
-                                image_path = candidate
-                                break
+        self.logger.info(
+            f"Processing {len(input_files)} files: {source_format or 'auto'} → {target_format}"
+        )
 
-                    self.convert_file(
-                        input_file,
-                        output_file,
-                        source_format=curr_source_format,
-                        target_format=target_format,
-                        image_path=image_path,
-                    )
-            except Exception as e:
-                self.results[input_file.stem] = {
-                    "input_path": str(input_file),
-                    "source_format": curr_source_format,
-                    "target_format": target_format,
-                    "output_path": None,
-                    "success": False,
-                    "error": str(e),
-                }
+        unmatched_annotations = []
+
+        with tqdm(input_files, desc="Converting", unit="file", ncols=80) as pbar:
+            for input_file in pbar:
+                pbar.set_postfix_str(input_file.name[:20])
+
+                try:
+                    curr_source_format = source_format
+
+                    if not curr_source_format and self.config.allow_auto_detect:
+                        try:
+                            curr_source_format = self._detect_format_from_path(
+                                input_file
+                            )
+                        except ValueError:
+                            self.results[input_file.stem] = {
+                                "input_path": str(input_file),
+                                "source_format": None,
+                                "target_format": target_format,
+                                "output_path": None,
+                                "success": False,
+                                "error": "Could not auto-detect source format",
+                            }
+                            continue
+
+                    if curr_source_format:
+                        output_suffix = (
+                            ".xml" if target_format == "asap" else ".geojson"
+                        )
+                        output_file = output_dir / f"{input_file.stem}{output_suffix}"
+
+                        image_path = None
+                        if target_format == "geojson_qupath_mrxs" and image_dir:
+                            for ext in [
+                                ".mrxs",
+                                ".svs",
+                                ".ndpi",
+                                ".vms",
+                                ".vmu",
+                                ".scn",
+                            ]:
+                                candidate = image_dir / f"{input_file.stem}{ext}"
+                                if candidate.exists():
+                                    image_path = candidate
+                                    break
+
+                            if not image_path:
+                                unmatched_annotations.append(input_file.name)
+
+                        self.convert_file(
+                            input_file,
+                            output_file,
+                            source_format=curr_source_format,
+                            target_format=target_format,
+                            image_path=image_path,
+                        )
+
+                except Exception as e:
+                    self.results[input_file.stem] = {
+                        "input_path": str(input_file),
+                        "source_format": curr_source_format,
+                        "target_format": target_format,
+                        "output_path": None,
+                        "success": False,
+                        "error": str(e),
+                    }
+
+        successful = sum(1 for r in self.results.values() if r.get("success", False))
+        total = len(input_files)
+
+        self.logger.info(
+            f"✓ Batch completed: {successful}/{total} files converted successfully"
+        )
+
+        if unmatched_annotations:
+            self.logger.warning(
+                f"⚠ {len(unmatched_annotations)} annotations have no matching images. "
+                f"Use convert_file() with explicit image_path for precise control."
+            )
 
         return self.results
