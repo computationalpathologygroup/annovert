@@ -76,5 +76,10 @@ class ImageReader:
             import openslide
 
             return openslide.OpenSlide.detect_format(str(image_path)) is not None
-        except:
+        except ImportError:
+            raise ImportError(
+                "openslide-python is required for compatibility checks. "
+                "Install it with: pip install openslide-python"
+            )
+        except Exception:
             return False
