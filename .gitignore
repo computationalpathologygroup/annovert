@@ -3,3 +3,7 @@ __pycache__
 output
 data
 rebuild.sh
+sandbox
+.DS_Store
+qupath_project
+build
