@@ -21,7 +21,7 @@ class Annovert:
                 format_type = Annotation.detect_format(content)
                 if format_type in ["geojson", "geojson_qupath_mrxs"]:
                     return format_type
-            except:
+            except ValueError:
                 return "geojson"
         elif suffix == ".xml":
             with open(file_path, "r") as f:
