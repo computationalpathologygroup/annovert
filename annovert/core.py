@@ -2,7 +2,7 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Any, Dict, Optional, Union
 
-from .basecore import Annotation, ConverterConfig, FormatType
+from .basecore import Annotation, ConverterConfig, FormatType, ImageMetadata
 from .formats import ASAPAnnotation, GeoJSONAnnotation, HistechAnnotation
 
 
@@ -15,7 +15,14 @@ class Annovert:
         suffix = file_path.suffix.lower()
 
         if suffix in [".geojson", ".json"]:
-            return "geojson"
+            with open(file_path, "r") as f:
+                content = f.read(4096)
+            try:
+                format_type = Annotation.detect_format(content)
+                if format_type in ["geojson", "geojson_qupath_mrxs"]:
+                    return format_type
+            except ValueError:
+                return "geojson"
         elif suffix == ".xml":
             with open(file_path, "r") as f:
                 content = f.read(4096)
@@ -46,6 +53,7 @@ class Annovert:
         output_path: Optional[Union[str, Path]] = None,
         source_format: Optional[FormatType] = None,
         target_format: Optional[FormatType] = None,
+        image_path: Optional[Union[str, Path]] = None,
     ) -> Any:
         input_path = Path(input_path)
 
@@ -63,6 +71,11 @@ class Annovert:
             annotation = ASAPAnnotation.from_file(input_path)
         elif source_format == "geojson":
             annotation = GeoJSONAnnotation.from_file(input_path)
+        elif source_format == "geojson_qupath_mrxs":
+            from .qupath_geojson import QuPathMRXSGeoJSONAnnotation
+
+            with open(input_path, "r") as f:
+                annotation = QuPathMRXSGeoJSONAnnotation.from_string(f.read())
         elif source_format == "3dhistech":
             annotation = HistechAnnotation.from_file(input_path)
         else:
@@ -72,7 +85,10 @@ class Annovert:
             if output_path:
                 suffix = Path(output_path).suffix.lower()
                 if suffix in [".geojson", ".json"]:
-                    target_format = "geojson"
+                    if output_path.stem.endswith("_qupath_mrxs"):
+                        target_format = "geojson_qupath_mrxs"
+                    else:
+                        target_format = "geojson"
                 elif suffix == ".xml":
                     target_format = "asap"
                 else:
@@ -87,7 +103,13 @@ class Annovert:
             else:
                 raise ValueError("Target format not specified and cannot be determined")
 
-        result = self.convert_object(annotation, target_format)
+        metadata = None
+        if target_format == "geojson_qupath_mrxs" and image_path:
+            from .image_reader import ImageReader
+
+            metadata = ImageReader.read_mrxs_metadata(image_path)
+
+        result = self.convert_object(annotation, target_format, metadata=metadata)
 
         if output_path:
             output_path = Path(output_path)
@@ -101,35 +123,69 @@ class Annovert:
             "source_format": source_format,
             "target_format": target_format,
             "output_path": str(output_path) if output_path else None,
+            "image_path": str(image_path) if image_path else None,
             "success": True,
         }
 
         return result
 
-    def convert_object(self, annotation, target_format: FormatType) -> Any:
+    def convert_object(
+        self,
+        annotation,
+        target_format: FormatType,
+        metadata: Optional[ImageMetadata] = None,
+    ) -> Any:
         if isinstance(annotation, ASAPAnnotation):
             if target_format == "asap":
                 return annotation
             elif target_format == "geojson":
                 return annotation.to_geojson()
+            elif target_format == "geojson_qupath_mrxs":
+                from .qupath_geojson import QuPathMRXSGeoJSONAnnotation
+
+                base_geojson = annotation.to_geojson()
+                return QuPathMRXSGeoJSONAnnotation.from_geojson(base_geojson, metadata)
             else:
                 raise ValueError(f"Unsupported conversion from ASAP to {target_format}")
 
         elif isinstance(annotation, GeoJSONAnnotation):
-            if target_format == "asap":
-                return annotation.to_asap()
-            elif target_format == "geojson":
-                return annotation
+            from .qupath_geojson import QuPathMRXSGeoJSONAnnotation
+
+            if isinstance(annotation, QuPathMRXSGeoJSONAnnotation):
+                if target_format == "asap":
+                    return annotation.to_standard_geojson().to_asap()
+                elif target_format == "geojson":
+                    return annotation.to_standard_geojson()
+                elif target_format == "geojson_qupath_mrxs":
+                    return annotation
+                else:
+                    raise ValueError(
+                        f"Unsupported conversion from QuPath MRXS GeoJSON to {target_format}"
+                    )
             else:
-                raise ValueError(
-                    f"Unsupported conversion from GeoJSON to {target_format}"
-                )
+                if target_format == "asap":
+                    return annotation.to_asap()
+                elif target_format == "geojson":
+                    return annotation
+                elif target_format == "geojson_qupath_mrxs":
+                    return QuPathMRXSGeoJSONAnnotation.from_geojson(
+                        annotation, metadata
+                    )
+                else:
+                    raise ValueError(
+                        f"Unsupported conversion from GeoJSON to {target_format}"
+                    )
 
         elif isinstance(annotation, HistechAnnotation):
             if target_format == "asap":
                 return annotation.to_asap()
             elif target_format == "geojson":
                 return annotation.to_geojson()
+            elif target_format == "geojson_qupath_mrxs":
+                from .qupath_geojson import QuPathMRXSGeoJSONAnnotation
+
+                base_geojson = annotation.to_geojson()
+                return QuPathMRXSGeoJSONAnnotation.from_geojson(base_geojson, metadata)
             else:
                 raise ValueError(
                     f"Unsupported conversion from 3D Histech to {target_format}"
@@ -145,8 +201,11 @@ class Annovert:
         source_format: Optional[FormatType] = None,
         target_format: Optional[FormatType] = None,
         file_pattern: str = "*.*",
+        image_dir: Optional[Union[str, Path]] = None,
     ) -> Dict[str, Any]:
         input_dir = Path(input_dir)
+        if image_dir:
+            image_dir = Path(image_dir)
 
         if output_dir:
             output_dir = Path(output_dir)
@@ -180,11 +239,20 @@ class Annovert:
                     output_suffix = ".xml" if target_format == "asap" else ".geojson"
                     output_file = output_dir / f"{input_file.stem}{output_suffix}"
 
+                    image_path = None
+                    if target_format == "geojson_qupath_mrxs" and image_dir:
+                        for ext in [".mrxs", ".svs", ".ndpi", ".vms", ".vmu", ".scn"]:
+                            candidate = image_dir / f"{input_file.stem}{ext}"
+                            if candidate.exists():
+                                image_path = candidate
+                                break
+
                     self.convert_file(
                         input_file,
                         output_file,
                         source_format=curr_source_format,
                         target_format=target_format,
+                        image_path=image_path,
                     )
             except Exception as e:
                 self.results[input_file.stem] = {
