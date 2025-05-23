@@ -2,9 +2,9 @@ import json
 import uuid
 import xml.etree.ElementTree as ET
 from pathlib import Path
-from typing import Any, Dict, List, Union
+from typing import Any, Dict, List, Union, Optional
 
-from .basecore import Annotation, Region
+from .basecore import Annotation, Region, ImageMetadata
 
 
 class ASAPAnnotation(Annotation):
@@ -276,3 +276,199 @@ class HistechAnnotation(Annotation):
 
     def to_geojson(self) -> GeoJSONAnnotation:
         return self.to_asap().to_geojson()
+
+
+class BinaryMaskAnnotation(Annotation):
+    def __init__(self, name: str = "", metadata: Optional[ImageMetadata] = None):
+        super().__init__(name)
+        self.mask = None
+        self.metadata = metadata or ImageMetadata()
+        self.label_mapping = {}
+
+    @staticmethod
+    def from_file(file_path: Union[str, Path]) -> "BinaryMaskAnnotation":
+        try:
+            import rasterio
+            import numpy as np
+        except ImportError:
+            raise ImportError(
+                "rasterio and numpy are required for binary mask support. "
+                "Install with: pip install rasterio numpy"
+            )
+
+        file_path = Path(file_path)
+        annotation = BinaryMaskAnnotation()
+
+        with rasterio.open(file_path) as src:
+            annotation.mask = src.read(1).astype(np.uint8)
+
+            unique_labels = np.unique(annotation.mask)
+            unique_labels = unique_labels[unique_labels > 0]
+
+            for label in unique_labels:
+                annotation.label_mapping[int(label)] = f"region_{label}"
+
+        return annotation
+
+    def save(self, output_path: Union[str, Path]) -> None:
+        output_path = Path(output_path)
+        suffix = output_path.suffix.lower()
+
+        if suffix in [".png", ".jpg", ".jpeg"]:
+            try:
+                from PIL import Image
+            except ImportError:
+                raise ImportError(
+                    "Pillow is required for PNG/JPG support. Install with: pip install Pillow"
+                )
+
+            mask_binary = (self.mask > 0).astype("uint8") * 255
+            Image.fromarray(mask_binary).save(output_path)
+
+        else:
+            try:
+                import rasterio
+            except ImportError:
+                raise ImportError(
+                    "rasterio is required for TIF support. Install with: pip install rasterio"
+                )
+
+            mask_binary = (self.mask > 0).astype("uint8") * 255
+
+            transform = rasterio.transform.from_bounds(
+                0,
+                0,
+                self.mask.shape[1],
+                self.mask.shape[0],
+                self.mask.shape[1],
+                self.mask.shape[0],
+            )
+
+            with rasterio.open(
+                output_path,
+                "w",
+                driver="GTiff",
+                height=self.mask.shape[0],
+                width=self.mask.shape[1],
+                count=1,
+                dtype="uint8",
+                transform=transform,
+                compress="lzw",
+            ) as dst:
+                dst.write(mask_binary, 1)
+
+    def to_geojson(self) -> GeoJSONAnnotation:
+        try:
+            import rasterio.features
+            import shapely.geometry
+            import numpy as np
+        except ImportError:
+            raise ImportError(
+                "rasterio, shapely, and numpy are required for mask to polygon conversion. "
+                "Install with: pip install rasterio shapely numpy"
+            )
+
+        geojson = GeoJSONAnnotation()
+
+        for label_value, label_name in self.label_mapping.items():
+            for geom, value in rasterio.features.shapes(
+                self.mask.astype(np.int16),
+                mask=(self.mask == label_value),
+                transform=rasterio.Affine(1.0, 0, 0, 0, 1.0, 0),
+            ):
+                polygon = shapely.geometry.shape(geom).buffer(0)
+
+                if polygon.geom_type == "Polygon" and len(polygon.exterior.coords) > 3:
+                    coords_list = list(polygon.exterior.coords)
+
+                    feature = {
+                        "type": "Feature",
+                        "id": str(uuid.uuid4()),
+                        "geometry": {"type": "Polygon", "coordinates": [coords_list]},
+                        "properties": {
+                            "objectType": "annotation",
+                            "name": label_name,
+                            "type": "Polygon",
+                            "source": "binary_mask",
+                            "label_value": label_value,
+                        },
+                    }
+
+                    geojson.add_feature(feature)
+
+        return geojson
+
+    def to_asap(self) -> ASAPAnnotation:
+        return self.to_geojson().to_asap()
+
+    @classmethod
+    def from_geojson(
+        cls,
+        geojson: GeoJSONAnnotation,
+        metadata: Optional[ImageMetadata] = None,
+        downsample_factor: float = 1.0,
+    ) -> "BinaryMaskAnnotation":
+        try:
+            import rasterio.features
+            import shapely.geometry
+            import numpy as np
+        except ImportError:
+            raise ImportError(
+                "rasterio, shapely, and numpy are required for polygon to mask conversion. "
+                "Install with: pip install rasterio shapely numpy"
+            )
+
+        annotation = cls(metadata=metadata)
+
+        if metadata and metadata.width > 0:
+            mask_width = int(metadata.width / downsample_factor)
+            mask_height = int(metadata.height / downsample_factor)
+        else:
+            all_coords = []
+            for feature in geojson.features:
+                if feature["geometry"]["type"] == "Polygon":
+                    coords = feature["geometry"]["coordinates"][0]
+                    all_coords.extend(coords)
+
+            if not all_coords:
+                raise ValueError("No polygon coordinates found in GeoJSON")
+
+            xs, ys = zip(*all_coords)
+            mask_width = int((max(xs) - min(xs)) / downsample_factor) + 50
+            mask_height = int((max(ys) - min(ys)) / downsample_factor) + 50
+
+        annotation.mask = np.zeros((mask_height, mask_width), dtype=np.uint8)
+
+        shapes = []
+        label_counter = 1
+
+        for feature in geojson.features:
+            if feature["geometry"]["type"] == "Polygon":
+                properties = feature.get("properties", {})
+                label_value = properties.get("label_value", label_counter)
+                label_name = properties.get("name", f"region_{label_value}")
+
+                annotation.label_mapping[label_value] = label_name
+
+                coords = feature["geometry"]["coordinates"][0]
+                scaled_coords = [
+                    (x / downsample_factor, y / downsample_factor) for x, y in coords
+                ]
+
+                polygon = shapely.geometry.Polygon(scaled_coords)
+                if polygon.is_valid and not polygon.is_empty:
+                    shapes.append((polygon, label_value))
+
+                label_counter += 1
+
+        if shapes:
+            annotation.mask = rasterio.features.rasterize(
+                shapes, out_shape=(mask_height, mask_width), fill=0, dtype=np.uint8
+            )
+
+        unique_vals = np.unique(annotation.mask)
+        print(
+            f"Created mask {mask_width}x{mask_height}, values: {unique_vals}, {len(shapes)} polygons"
+        )
+
+        return annotation

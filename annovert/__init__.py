@@ -7,7 +7,12 @@ from .basecore import (
     Region,
 )
 from .core import Annovert
-from .formats import ASAPAnnotation, GeoJSONAnnotation, HistechAnnotation
+from .formats import (
+    ASAPAnnotation,
+    GeoJSONAnnotation,
+    HistechAnnotation,
+    BinaryMaskAnnotation,
+)
 from .image_reader import ImageReader
 from .qupath_geojson import QuPathMRXSGeoJSONAnnotation
 
