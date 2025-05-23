@@ -8,7 +8,6 @@ version = "0.1.0"
 description = "Convert between digital pathology annotation formats (ASAP XML, GeoJSON, 3D Histech, QuPath MRXS)"
 readme = "README.md"
 requires-python = ">=3.7"
-license = {text = "MIT"}
 
 keywords = [
     "digital pathology",
@@ -39,7 +38,9 @@ classifiers = [
     "Operating System :: OS Independent",
 ]
 
-dependencies = []
+dependencies = [
+    "tqdm"
+]
 
 [project.optional-dependencies]
 mrxs = [

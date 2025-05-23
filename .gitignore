@@ -7,3 +7,4 @@ sandbox
 .DS_Store
 qupath_project
 build
+example_sandbox.py
