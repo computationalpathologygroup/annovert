@@ -2,14 +2,14 @@ import json
 import uuid
 import xml.etree.ElementTree as ET
 from pathlib import Path
-from typing import Any, Dict, List, Union, Optional
+from typing import Any, Dict, List, Union, Optional, Tuple
 
 from .basecore import Annotation, Region, ImageMetadata
 
 
 class ASAPAnnotation(Annotation):
-    def __init__(self, name: str = ""):
-        super().__init__(name)
+    def __init__(self, name: str = "") -> None:
+        super().__init__(name=name)
         self.regions: List[Region] = []
         self.groups: Dict[str, Any] = {}
 
@@ -37,21 +37,18 @@ class ASAPAnnotation(Annotation):
                 region.add_coordinate(x, y)
 
             annotation.add_region(region)
-
         return annotation
 
     @staticmethod
     def from_file(file_path: Union[str, Path]) -> "ASAPAnnotation":
-        file_path = Path(file_path)
         with open(file_path, "r") as f:
-            xml_string = f.read()
-        return ASAPAnnotation.from_string(xml_string)
+            return ASAPAnnotation.from_string(f.read())
 
     def to_xml(self) -> str:
         root = ET.Element("ASAP_Annotations")
         annotations = ET.SubElement(root, "Annotations")
 
-        for i, region in enumerate(self.regions):
+        for region in self.regions:
             annotation = ET.SubElement(annotations, "Annotation")
             annotation.set("Name", region.name)
             annotation.set("Type", region.region_type)
@@ -59,22 +56,17 @@ class ASAPAnnotation(Annotation):
             annotation.set("Color", region.color or "#F4FA58")
 
             coordinates = ET.SubElement(annotation, "Coordinates")
-
             for j, coord in enumerate(region.coordinates):
                 coordinate = ET.SubElement(coordinates, "Coordinate")
                 coordinate.set("Order", str(j))
                 coordinate.set("X", str(coord.x))
                 coordinate.set("Y", str(coord.y))
 
-        groups = ET.SubElement(root, "AnnotationGroups")
-
+        ET.SubElement(root, "AnnotationGroups")
         xml_str = ET.tostring(root, encoding="utf-8").decode("utf-8")
-        xml_declaration = '<?xml version="1.0"?>\n'
-
-        return xml_declaration + xml_str
+        return '<?xml version="1.0"?>\n' + xml_str
 
     def save(self, output_path: Union[str, Path]) -> None:
-        output_path = Path(output_path)
         with open(output_path, "w") as f:
             f.write(self.to_xml())
 
@@ -86,7 +78,6 @@ class ASAPAnnotation(Annotation):
                 continue
 
             coords_list = [coord.to_list() for coord in region.coordinates]
-
             if coords_list[0] != coords_list[-1]:
                 coords_list.append(coords_list[0])
 
@@ -106,18 +97,16 @@ class ASAPAnnotation(Annotation):
                 "geometry": {"type": region.region_type, "coordinates": [coords_list]},
                 "properties": properties,
             }
-
             geojson.features.append(feature)
-
         return geojson
 
 
 class GeoJSONAnnotation(Annotation):
-    def __init__(self, name: str = ""):
-        super().__init__(name)
-        self.features: List[Dict] = []
+    def __init__(self, name: str = "") -> None:
+        super().__init__(name=name)
+        self.features: List[Dict[str, Any]] = []
 
-    def add_feature(self, feature: Dict) -> None:
+    def add_feature(self, feature: Dict[str, Any]) -> None:
         self.features.append(feature)
 
     @staticmethod
@@ -130,26 +119,20 @@ class GeoJSONAnnotation(Annotation):
             return QuPathMRXSGeoJSONAnnotation.from_string(json_string)
 
         annotation = GeoJSONAnnotation()
-
         if "features" in data:
             annotation.features = data["features"]
-
         return annotation
 
     @staticmethod
     def from_file(file_path: Union[str, Path]) -> "GeoJSONAnnotation":
-        file_path = Path(file_path)
         with open(file_path, "r") as f:
-            json_string = f.read()
-        return GeoJSONAnnotation.from_string(json_string)
+            return GeoJSONAnnotation.from_string(f.read())
 
     def to_json(self) -> str:
         geojson = {"type": "FeatureCollection", "features": self.features}
-
         return json.dumps(geojson, indent=2)
 
     def save(self, output_path: Union[str, Path]) -> None:
-        output_path = Path(output_path)
         with open(output_path, "w") as f:
             f.write(self.to_json())
 
@@ -159,17 +142,11 @@ class GeoJSONAnnotation(Annotation):
         for feature in self.features:
             if feature["geometry"]["type"] == "Polygon":
                 properties = feature.get("properties", {})
-
-                name = properties.get("name", "Region")
-                region_type = properties.get("type", "Polygon")
-                color = properties.get("color", "#F4FA58")
-                group = properties.get("group", "None")
-
                 region = Region(
-                    name=name,
-                    region_type=region_type,
-                    color=color,
-                    group=group,
+                    name=properties.get("name", "Region"),
+                    region_type=properties.get("type", "Polygon"),
+                    color=properties.get("color", "#F4FA58"),
+                    group=properties.get("group", "None"),
                     guid=feature.get("id", str(uuid.uuid4())),
                 )
 
@@ -181,13 +158,12 @@ class GeoJSONAnnotation(Annotation):
                     region.add_coordinate(x, y)
 
                 asap.add_region(region)
-
         return asap
 
 
 class HistechAnnotation(Annotation):
-    def __init__(self, name: str = ""):
-        super().__init__(name)
+    def __init__(self, name: str = "") -> None:
+        super().__init__(name=name)
         self.regions: List[Region] = []
         self.offset_left: int = 0
         self.offset_top: int = 0
@@ -224,7 +200,6 @@ class HistechAnnotation(Annotation):
 
         for anno_elem in root.findall(".//bounding_annotation"):
             name = anno_elem.get("name", "")
-            region_type = anno_elem.get("type", "polygon")
             color = anno_elem.get("color_bgr", "")
             guid = anno_elem.get("guid", "")
 
@@ -235,7 +210,7 @@ class HistechAnnotation(Annotation):
                     color = f"#{rgb}"
                 elif not color or not color.startswith("#") or len(color) != 7:
                     color = "#F4FA58"
-            except:
+            except Exception:
                 color = "#F4FA58"
 
             region = Region(name=name, region_type="Polygon", color=color, guid=guid)
@@ -246,19 +221,15 @@ class HistechAnnotation(Annotation):
                 region.add_coordinate(x, y)
 
             annotation.add_region(region)
-
         return annotation
 
     @staticmethod
     def from_file(file_path: Union[str, Path]) -> "HistechAnnotation":
-        file_path = Path(file_path)
         with open(file_path, "r") as f:
-            xml_string = f.read()
-        return HistechAnnotation.from_string(xml_string)
+            return HistechAnnotation.from_string(f.read())
 
     def to_asap(self) -> ASAPAnnotation:
         asap = ASAPAnnotation()
-
         for region in self.regions:
             asap_region = Region(
                 name=region.name,
@@ -266,12 +237,9 @@ class HistechAnnotation(Annotation):
                 color=region.color,
                 guid=region.guid,
             )
-
             for coord in region.coordinates:
                 asap_region.add_coordinate(coord.x, coord.y)
-
             asap.add_region(asap_region)
-
         return asap
 
     def to_geojson(self) -> GeoJSONAnnotation:
@@ -279,44 +247,43 @@ class HistechAnnotation(Annotation):
 
 
 class BinaryMaskAnnotation(Annotation):
-    def __init__(self, name: str = "", metadata: Optional[ImageMetadata] = None):
-        super().__init__(name)
-        self.mask = None
+    def __init__(
+        self, name: str = "", metadata: Optional[ImageMetadata] = None
+    ) -> None:
+        super().__init__(name=name)
+        self.mask: Optional[Any] = None
         self.metadata = metadata or ImageMetadata()
-        self.label_mapping = {}
+        self.label_mapping: Dict[int, str] = {}
 
     @staticmethod
     def from_file(file_path: Union[str, Path]) -> "BinaryMaskAnnotation":
         try:
-            import rasterio
+            import rasterio  # type: ignore
             import numpy as np
         except ImportError:
             raise ImportError(
-                "rasterio and numpy are required for binary mask support. "
-                "Install with: pip install rasterio numpy"
+                "rasterio and numpy are required for binary mask support. Install with: pip install rasterio numpy"
             )
 
-        file_path = Path(file_path)
         annotation = BinaryMaskAnnotation()
-
         with rasterio.open(file_path) as src:
             annotation.mask = src.read(1).astype(np.uint8)
-
             unique_labels = np.unique(annotation.mask)
             unique_labels = unique_labels[unique_labels > 0]
-
             for label in unique_labels:
                 annotation.label_mapping[int(label)] = f"region_{label}"
-
         return annotation
 
     def save(self, output_path: Union[str, Path]) -> None:
+        if self.mask is None:
+            raise ValueError("No mask data to save")
+
         output_path = Path(output_path)
         suffix = output_path.suffix.lower()
 
         if suffix in [".png", ".jpg", ".jpeg"]:
             try:
-                from PIL import Image
+                from PIL import Image  # type: ignore
             except ImportError:
                 raise ImportError(
                     "Pillow is required for PNG/JPG support. Install with: pip install Pillow"
@@ -324,17 +291,15 @@ class BinaryMaskAnnotation(Annotation):
 
             mask_binary = (self.mask > 0).astype("uint8") * 255
             Image.fromarray(mask_binary).save(output_path)
-
         else:
             try:
-                import rasterio
+                import rasterio  # type: ignore
             except ImportError:
                 raise ImportError(
                     "rasterio is required for TIF support. Install with: pip install rasterio"
                 )
 
             mask_binary = (self.mask > 0).astype("uint8") * 255
-
             transform = rasterio.transform.from_bounds(
                 0,
                 0,
@@ -358,18 +323,19 @@ class BinaryMaskAnnotation(Annotation):
                 dst.write(mask_binary, 1)
 
     def to_geojson(self) -> GeoJSONAnnotation:
+        if self.mask is None:
+            raise ValueError("No mask data to convert")
+
         try:
-            import rasterio.features
-            import shapely.geometry
+            import rasterio.features  # type: ignore
+            import shapely.geometry  # type: ignore
             import numpy as np
         except ImportError:
             raise ImportError(
-                "rasterio, shapely, and numpy are required for mask to polygon conversion. "
-                "Install with: pip install rasterio shapely numpy"
+                "rasterio, shapely, and numpy are required for mask to polygon conversion. Install with: pip install rasterio shapely numpy"
             )
 
         geojson = GeoJSONAnnotation()
-
         for label_value, label_name in self.label_mapping.items():
             for geom, value in rasterio.features.shapes(
                 self.mask.astype(np.int16),
@@ -377,10 +343,8 @@ class BinaryMaskAnnotation(Annotation):
                 transform=rasterio.Affine(1.0, 0, 0, 0, 1.0, 0),
             ):
                 polygon = shapely.geometry.shape(geom).buffer(0)
-
                 if polygon.geom_type == "Polygon" and len(polygon.exterior.coords) > 3:
                     coords_list = list(polygon.exterior.coords)
-
                     feature = {
                         "type": "Feature",
                         "id": str(uuid.uuid4()),
@@ -393,9 +357,7 @@ class BinaryMaskAnnotation(Annotation):
                             "label_value": label_value,
                         },
                     }
-
                     geojson.add_feature(feature)
-
         return geojson
 
     def to_asap(self) -> ASAPAnnotation:
@@ -409,13 +371,12 @@ class BinaryMaskAnnotation(Annotation):
         downsample_factor: float = 1.0,
     ) -> "BinaryMaskAnnotation":
         try:
-            import rasterio.features
-            import shapely.geometry
+            import rasterio.features  # type: ignore
+            import shapely.geometry  # type: ignore
             import numpy as np
         except ImportError:
             raise ImportError(
-                "rasterio, shapely, and numpy are required for polygon to mask conversion. "
-                "Install with: pip install rasterio shapely numpy"
+                "rasterio, shapely, and numpy are required for polygon to mask conversion. Install with: pip install rasterio shapely numpy"
             )
 
         annotation = cls(metadata=metadata)
@@ -423,21 +384,16 @@ class BinaryMaskAnnotation(Annotation):
         if metadata and metadata.width > 0:
             mask_width = int(metadata.width / downsample_factor)
             mask_height = int(metadata.height / downsample_factor)
+            annotation.mask = np.zeros((mask_height, mask_width), dtype=np.uint8)
+            offset_x, offset_y = 0, 0
         else:
-            all_coords = []
-            for feature in geojson.features:
-                if feature["geometry"]["type"] == "Polygon":
-                    coords = feature["geometry"]["coordinates"][0]
-                    all_coords.extend(coords)
-
-            if not all_coords:
-                raise ValueError("No polygon coordinates found in GeoJSON")
-
-            xs, ys = zip(*all_coords)
-            mask_width = int((max(xs) - min(xs)) / downsample_factor) + 50
-            mask_height = int((max(ys) - min(ys)) / downsample_factor) + 50
-
-        annotation.mask = np.zeros((mask_height, mask_width), dtype=np.uint8)
+            (
+                mask_width,
+                mask_height,
+                offset_x,
+                offset_y,
+            ) = cls._calculate_mask_dimensions_with_offset(geojson, downsample_factor)
+            annotation.mask = np.zeros((mask_height, mask_width), dtype=np.uint8)
 
         shapes = []
         label_counter = 1
@@ -447,18 +403,20 @@ class BinaryMaskAnnotation(Annotation):
                 properties = feature.get("properties", {})
                 label_value = properties.get("label_value", label_counter)
                 label_name = properties.get("name", f"region_{label_value}")
-
                 annotation.label_mapping[label_value] = label_name
 
                 coords = feature["geometry"]["coordinates"][0]
                 scaled_coords = [
-                    (x / downsample_factor, y / downsample_factor) for x, y in coords
+                    (
+                        (x - offset_x) / downsample_factor,
+                        (y - offset_y) / downsample_factor,
+                    )
+                    for x, y in coords
                 ]
-
                 polygon = shapely.geometry.Polygon(scaled_coords)
+
                 if polygon.is_valid and not polygon.is_empty:
                     shapes.append((polygon, label_value))
-
                 label_counter += 1
 
         if shapes:
@@ -466,9 +424,29 @@ class BinaryMaskAnnotation(Annotation):
                 shapes, out_shape=(mask_height, mask_width), fill=0, dtype=np.uint8
             )
 
-        unique_vals = np.unique(annotation.mask)
         print(
-            f"Created mask {mask_width}x{mask_height}, values: {unique_vals}, {len(shapes)} polygons"
+            f"Created mask {mask_width}x{mask_height}, values: {np.unique(annotation.mask)}, {len(shapes)} polygons"
         )
-
         return annotation
+
+    @staticmethod
+    def _calculate_mask_dimensions_with_offset(
+        geojson: GeoJSONAnnotation, downsample_factor: float
+    ) -> Tuple[int, int, float, float]:
+        all_coords = []
+        for feature in geojson.features:
+            if feature["geometry"]["type"] == "Polygon":
+                coords = feature["geometry"]["coordinates"][0]
+                all_coords.extend(coords)
+
+        if not all_coords:
+            raise ValueError("No polygon coordinates found in GeoJSON")
+
+        xs, ys = zip(*all_coords)
+        min_x, max_x = min(xs), max(xs)
+        min_y, max_y = min(ys), max(ys)
+
+        mask_width = int((max_x - min_x) / downsample_factor)
+        mask_height = int((max_y - min_y) / downsample_factor)
+
+        return mask_width, mask_height, min_x, min_y

@@ -15,5 +15,10 @@ from .formats import (
 )
 from .image_reader import ImageReader
 from .qupath_geojson import QuPathMRXSGeoJSONAnnotation
+from .aggregation import (
+    AggregationConfig,
+    AnnotationGrouper,
+    HistechAggregator,
+)
 
 __version__ = "0.1.0"
