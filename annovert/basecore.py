@@ -1,19 +1,17 @@
-import re
-import uuid
 from pathlib import Path
-from typing import Dict, List, Literal, Optional, Tuple, Union, TYPE_CHECKING
-from dataclasses import dataclass
-
-if TYPE_CHECKING:
-    from .aggregation import AggregationConfig
+from typing import Dict, List, Literal, Optional, Tuple
+from pydantic import BaseModel, Field, ConfigDict
+import uuid
+import re
 
 FormatType = Literal[
     "asap", "geojson", "3dhistech", "geojson_qupath_mrxs", "binary_mask"
 ]
 
 
-@dataclass
-class ImageMetadata:
+class ImageMetadata(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
     offset_x: float = 0.0
     offset_y: float = 0.0
     mpp_x: float = 1.0
@@ -24,8 +22,9 @@ class ImageMetadata:
     level_0_height: int = 0
 
 
-@dataclass
-class Coordinate:
+class Coordinate(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
     x: float
     y: float
 
@@ -39,24 +38,14 @@ class Coordinate:
         return (self.x, self.y)
 
 
-class Region:
-    def __init__(
-        self,
-        name: str,
-        region_type: str = "Polygon",
-        coordinates: Optional[List[Coordinate]] = None,
-        color: Optional[str] = None,
-        group: Optional[str] = None,
-        guid: Optional[str] = None,
-        label_value: int = 1,
-    ) -> None:
-        self.name = name
-        self.region_type = region_type
-        self.coordinates = coordinates or []
-        self.color = color
-        self.group = group
-        self.guid = guid or str(uuid.uuid4())
-        self.label_value = label_value
+class Region(BaseModel):
+    name: str
+    region_type: str = "Polygon"
+    coordinates: List[Coordinate] = Field(default_factory=list)
+    color: Optional[str] = None
+    group: Optional[str] = None
+    guid: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    label_value: int = 1
 
     def add_coordinate(self, x: float, y: float) -> None:
         self.coordinates.append(Coordinate(x=x, y=y))
@@ -67,6 +56,55 @@ class Region:
     def as_tuple_list(self) -> List[Tuple[float, float]]:
         return [coord.to_tuple() for coord in self.coordinates]
 
+    @property
+    def bounds(self) -> Tuple[float, float, float, float]:
+        if not self.coordinates:
+            return (0.0, 0.0, 0.0, 0.0)
+        xs = [c.x for c in self.coordinates]
+        ys = [c.y for c in self.coordinates]
+        return (min(xs), min(ys), max(xs), max(ys))
+
+
+class AggregationConfig(BaseModel):
+    enabled: bool = False
+    grouping_strategy: str = Field(default="auto")
+    separator_patterns: List[str] = Field(default_factory=lambda: ["_", "-", ".", " "])
+    common_suffixes: List[str] = Field(
+        default_factory=lambda: [
+            "annotation",
+            "anno",
+            "region",
+            "roi",
+            "area",
+            "zone",
+            "mask",
+        ]
+    )
+    custom_regex: Optional[str] = None
+    min_group_size: int = 1
+    preserve_individual_names: bool = True
+    merge_overlapping_regions: bool = False
+
+
+class FormatDetector:
+    _PATTERNS = {
+        "asap": r"<ASAP_Annotations>",
+        "3dhistech": r"<annotation_meta_data",
+        "geojson": r'"type"\s*:\s*"FeatureCollection"',
+        "geojson_qupath_mrxs": r'"qupath_mrxs"\s*:\s*true',
+    }
+
+    @classmethod
+    def detect_format(cls, content: str) -> FormatType:
+        for format_type, pattern in cls._PATTERNS.items():
+            if re.search(pattern, content):
+                if format_type == "geojson" and re.search(
+                    cls._PATTERNS["geojson_qupath_mrxs"], content
+                ):
+                    return "geojson_qupath_mrxs"
+                return format_type
+        raise ValueError("Unknown annotation format")
+
 
 class Annotation:
     def __init__(self, name: str = "") -> None:
@@ -74,51 +112,20 @@ class Annotation:
 
     @staticmethod
     def detect_format(content: str) -> FormatType:
-        patterns = {
-            "asap": r"<ASAP_Annotations>",
-            "3dhistech": r"<annotation_meta_data",
-            "geojson": r'"type"\s*:\s*"FeatureCollection"',
-            "geojson_qupath_mrxs": r'"qupath_mrxs"\s*:\s*true',
-        }
-
-        for format_type, pattern in patterns.items():
-            if re.search(pattern, content):
-                if format_type == "geojson" and re.search(
-                    patterns["geojson_qupath_mrxs"], content
-                ):
-                    return "geojson_qupath_mrxs"
-                return format_type  # type: ignore
-
-        raise ValueError("Unknown annotation format")
+        return FormatDetector.detect_format(content)
 
 
-class ConverterConfig:
-    def __init__(
-        self,
-        allow_auto_detect: bool = True,
-        default_source_format: Optional[FormatType] = None,
-        default_target_format: Optional[FormatType] = None,
-        output_directory: Optional[Union[str, Path]] = None,
-        mask_downsample_factor: float = 1.0,
-        default_label_value: int = 1,
-        aggregation: Optional["AggregationConfig"] = None,
-    ) -> None:
-        self.allow_auto_detect = allow_auto_detect
-        self.default_source_format = default_source_format
-        self.default_target_format = default_target_format
-        self.mask_downsample_factor = mask_downsample_factor
-        self.default_label_value = default_label_value
+class ConverterConfig(BaseModel):
+    allow_auto_detect: bool = True
+    default_source_format: Optional[FormatType] = None
+    default_target_format: Optional[FormatType] = None
+    output_directory: Optional[Path] = None
+    mask_downsample_factor: float = 1.0
+    default_label_value: int = 1
+    aggregation: AggregationConfig = Field(default_factory=AggregationConfig)
+    enable_parallel_processing: bool = True
+    chunk_size: int = 1000
 
-        if aggregation is None:
-            from .aggregation import AggregationConfig
-
-            self.aggregation: "AggregationConfig" = AggregationConfig()
-        else:
-            self.aggregation = aggregation
-
-        self.output_directory: Optional[Path]
-        if output_directory:
-            self.output_directory = Path(output_directory)
+    def model_post_init(self, __context) -> None:
+        if self.output_directory:
             self.output_directory.mkdir(parents=True, exist_ok=True)
-        else:
-            self.output_directory = None

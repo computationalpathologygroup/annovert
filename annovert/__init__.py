@@ -5,6 +5,8 @@ from .basecore import (
     FormatType,
     ImageMetadata,
     Region,
+    FormatDetector,
+    AggregationConfig,
 )
 from .core import Annovert
 from .formats import (
@@ -16,7 +18,6 @@ from .formats import (
 from .image_reader import ImageReader
 from .qupath_geojson import QuPathMRXSGeoJSONAnnotation
 from .aggregation import (
-    AggregationConfig,
     AnnotationGrouper,
     HistechAggregator,
 )

@@ -1,5 +1,5 @@
 import json
-from typing import Dict, Optional, Any, List
+from typing import Dict, Optional, Any
 
 from .basecore import ImageMetadata
 from .formats import GeoJSONAnnotation
