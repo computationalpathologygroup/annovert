@@ -41,12 +41,32 @@ classifiers = [
 ]
 
 dependencies = [
+    "pydantic",
+    "pillow",
     "tqdm",
     "rasterio",
     "shapely", 
     "numpy",
     "openslide-python",
     "openslide-bin"
+]
+
+[project.optional-dependencies]
+core = [
+    "pydantic",
+    "tqdm",
+]
+
+binary-mask = [
+    "numpy",
+    "rasterio", 
+    "shapely",
+    "pillow",
+]
+
+slides = [
+    "openslide-python",
+    "openslide-bin",
 ]
 
 [tool.setuptools.packages.find]
