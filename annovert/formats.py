@@ -73,16 +73,49 @@ class ASAPAnnotation(Annotation):
         with open(output_path, "w") as f:
             f.write(self.to_xml())
 
+    def _normalize_geometry_type(self, asap_type: str, coords_list: list) -> str:
+        asap_type_lower = asap_type.lower()
+        
+        if asap_type_lower in ["rectangle", "polygon", "spline", "freehand"]:
+            return "Polygon"
+        elif asap_type_lower in ["line", "linestring"]:
+            return "LineString"
+        elif asap_type_lower in ["point", "dot"]:
+            return "Point"
+        else:
+            if len(coords_list) == 1:
+                return "Point"
+            elif len(coords_list) == 2:
+                return "LineString"
+            else:
+                return "Polygon"
+
     def to_geojson(self) -> "GeoJSONAnnotation":
         geojson = GeoJSONAnnotation()
 
         for region in self.regions:
-            if len(region.coordinates) < 3:
+            if len(region.coordinates) == 0:
                 continue
 
             coords_list = [coord.to_list() for coord in region.coordinates]
-            if coords_list[0] != coords_list[-1]:
-                coords_list.append(coords_list[0])
+            geometry_type = self._normalize_geometry_type(region.region_type, coords_list)
+            
+            if geometry_type == "Polygon":
+                if len(coords_list) < 3:
+                    continue
+                if coords_list[0] != coords_list[-1]:
+                    coords_list.append(coords_list[0])
+                coordinates = [coords_list]
+            elif geometry_type == "LineString":
+                if len(coords_list) < 2:
+                    continue
+                coordinates = coords_list
+            elif geometry_type == "Point":
+                if len(coords_list) != 1:
+                    continue
+                coordinates = coords_list[0]
+            else:
+                continue
 
             properties = {
                 "objectType": "annotation",
@@ -97,7 +130,7 @@ class ASAPAnnotation(Annotation):
             feature = {
                 "type": "Feature",
                 "id": region.guid,
-                "geometry": {"type": region.region_type, "coordinates": [coords_list]},
+                "geometry": {"type": geometry_type, "coordinates": coordinates},
                 "properties": properties,
             }
             geojson.features.append(feature)
@@ -143,24 +176,34 @@ class GeoJSONAnnotation(Annotation):
         asap = ASAPAnnotation()
 
         for feature in self.features:
-            if feature["geometry"]["type"] == "Polygon":
-                properties = feature.get("properties", {})
-                region = Region(
-                    name=properties.get("name", "Region"),
-                    region_type=properties.get("type", "Polygon"),
-                    color=properties.get("color", "#F4FA58"),
-                    group=properties.get("group", "None"),
-                    guid=feature.get("id", str(uuid.uuid4())),
-                )
+            geometry_type = feature["geometry"]["type"]
+            properties = feature.get("properties", {})
+            
+            region = Region(
+                name=properties.get("name", "Region"),
+                region_type=properties.get("type", geometry_type),
+                color=properties.get("color", "#F4FA58"),
+                group=properties.get("group", "None"),
+                guid=feature.get("id", str(uuid.uuid4())),
+            )
 
+            if geometry_type == "Polygon":
                 coord_list = feature["geometry"]["coordinates"][0]
                 if len(coord_list) > 1 and coord_list[0] == coord_list[-1]:
                     coord_list = coord_list[:-1]
-
                 for x, y in coord_list:
                     region.add_coordinate(x, y)
+            elif geometry_type == "LineString":
+                coord_list = feature["geometry"]["coordinates"]
+                for x, y in coord_list:
+                    region.add_coordinate(x, y)
+            elif geometry_type == "Point":
+                x, y = feature["geometry"]["coordinates"]
+                region.add_coordinate(x, y)
+            else:
+                continue
 
-                asap.add_region(region)
+            asap.add_region(region)
         return asap
 
 
