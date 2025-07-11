@@ -349,50 +349,72 @@ class BinaryMaskAnnotation(Annotation):
     def _save_tiff_format(self, output_path: Path) -> None:
         try:
             from PIL import Image
-            import rasterio
             import warnings
         except ImportError:
-            raise ImportError("Pillow and rasterio are required for TIFF support")
+            raise ImportError("Pillow is required for TIFF support")
 
         Image.MAX_IMAGE_PIXELS = None
 
-        with warnings.catch_warnings():
-            warnings.filterwarnings(
-                "ignore", category=rasterio.errors.NotGeoreferencedWarning
-            )
+        mask_binary = (self.mask > 0).astype(np.uint8) * 255
+        height, width = mask_binary.shape
 
-            mask_binary = (self.mask > 0).astype(np.uint8) * 255
-            height, width = mask_binary.shape
+        if self.metadata and self.metadata.mpp_x > 0:
+            pixel_size_um = self.metadata.mpp_x * self.downsample_factor
+        else:
+            default_original_pixel_size = 0.25
+            pixel_size_um = default_original_pixel_size * self.downsample_factor
 
-            if self.metadata.mpp_x > 0:
-                pixel_size_um = self.metadata.mpp_x * self.downsample_factor
-            else:
-                pixel_size_um = self.downsample_factor
+        dpi = 25400.0 / pixel_size_um
 
-            pixels_per_unit = 10000.0 / pixel_size_um
+        estimated_size_gb = (height * width) / (1024**3)
+        needs_bigtiff = estimated_size_gb > 3.5 or height > 65535 or width > 65535
 
-            profile = {
-                "driver": "GTiff",
-                "dtype": "uint8",
-                "width": width,
-                "height": height,
-                "count": 1,
-                "compress": "lzw",
-                "tiled": True,
-                "blockxsize": min(512, width),
-                "blockysize": min(512, height),
-                "BIGTIFF": "YES",
-            }
+        if needs_bigtiff:
+            try:
+                import rasterio
 
-            with rasterio.open(output_path, "w", **profile) as dst:
-                dst.write(mask_binary, 1)
+                with warnings.catch_warnings():
+                    warnings.filterwarnings(
+                        "ignore", category=rasterio.errors.NotGeoreferencedWarning
+                    )
 
-                dst.update_tags(
-                    TIFFTAG_XRESOLUTION=pixels_per_unit,
-                    TIFFTAG_YRESOLUTION=pixels_per_unit,
-                    TIFFTAG_RESOLUTIONUNIT=3,
-                    ImageDescription=f"Binary mask, pixel size: {pixel_size_um:.3f} μm/pixel, downsample: {self.downsample_factor}x",
+                    pixels_per_unit = 10000.0 / pixel_size_um
+
+                    profile = {
+                        "driver": "GTiff",
+                        "dtype": "uint8",
+                        "width": width,
+                        "height": height,
+                        "count": 1,
+                        "compress": "lzw",
+                        "tiled": True,
+                        "blockxsize": min(512, width),
+                        "blockysize": min(512, height),
+                        "BIGTIFF": "YES",
+                    }
+
+                    with rasterio.open(output_path, "w", **profile) as dst:
+                        dst.write(mask_binary, 1)
+
+                        dst.update_tags(
+                            TIFFTAG_XRESOLUTION=pixels_per_unit,
+                            TIFFTAG_YRESOLUTION=pixels_per_unit,
+                            TIFFTAG_RESOLUTIONUNIT=3,
+                            ImageDescription=f"Binary mask, pixel size: {pixel_size_um:.3f} μm/pixel, downsample: {self.downsample_factor}x",
+                        )
+            except ImportError:
+                raise ImportError(
+                    "rasterio is required for large TIFF files. Install with: pip install rasterio"
                 )
+        else:
+            img = Image.fromarray(mask_binary)
+            img.save(
+                output_path,
+                format="TIFF",
+                dpi=(dpi, dpi),
+                compression="lzw",
+                description=f"Binary mask, pixel size: {pixel_size_um:.3f} μm/pixel, downsample: {self.downsample_factor}x",
+            )
 
     @lru_cache(maxsize=1)
     def _get_bounds(self) -> Tuple[float, float, float, float]:
