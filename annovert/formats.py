@@ -75,7 +75,7 @@ class ASAPAnnotation(Annotation):
 
     def _normalize_geometry_type(self, asap_type: str, coords_list: list) -> str:
         asap_type_lower = asap_type.lower()
-        
+
         if asap_type_lower in ["rectangle", "polygon", "spline", "freehand"]:
             return "Polygon"
         elif asap_type_lower in ["line", "linestring"]:
@@ -98,8 +98,10 @@ class ASAPAnnotation(Annotation):
                 continue
 
             coords_list = [coord.to_list() for coord in region.coordinates]
-            geometry_type = self._normalize_geometry_type(region.region_type, coords_list)
-            
+            geometry_type = self._normalize_geometry_type(
+                region.region_type, coords_list
+            )
+
             if geometry_type == "Polygon":
                 if len(coords_list) < 3:
                     continue
@@ -178,7 +180,7 @@ class GeoJSONAnnotation(Annotation):
         for feature in self.features:
             geometry_type = feature["geometry"]["type"]
             properties = feature.get("properties", {})
-            
+
             region = Region(
                 name=properties.get("name", "Region"),
                 region_type=properties.get("type", geometry_type),
@@ -300,20 +302,21 @@ class BinaryMaskAnnotation(Annotation):
         self.mask: Optional[np.ndarray] = None
         self.metadata = metadata or ImageMetadata()
         self.label_mapping: Dict[int, str] = {}
+        self.downsample_factor: float = 1.0
         self._bounds_cache: Optional[Tuple[float, float, float, float]] = None
 
     @staticmethod
     def from_file(file_path: Union[str, Path]) -> "BinaryMaskAnnotation":
         try:
-            import rasterio
+            from PIL import Image
         except ImportError:
             raise ImportError(
-                "rasterio and numpy are required for binary mask support. Install with: pip install rasterio numpy"
+                "Pillow is required for binary mask support. Install with: pip install Pillow"
             )
 
         annotation = BinaryMaskAnnotation()
-        with rasterio.open(file_path) as src:
-            annotation.mask = src.read(1).astype(np.uint8)
+        with Image.open(file_path) as img:
+            annotation.mask = np.array(img.convert("L")).astype(np.uint8)
             unique_labels = np.unique(annotation.mask)
             unique_labels = unique_labels[unique_labels > 0]
             for label in unique_labels:
@@ -345,34 +348,51 @@ class BinaryMaskAnnotation(Annotation):
 
     def _save_tiff_format(self, output_path: Path) -> None:
         try:
+            from PIL import Image
             import rasterio
+            import warnings
         except ImportError:
-            raise ImportError(
-                "rasterio is required for TIF support. Install with: pip install rasterio"
+            raise ImportError("Pillow and rasterio are required for TIFF support")
+
+        Image.MAX_IMAGE_PIXELS = None
+
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore", category=rasterio.errors.NotGeoreferencedWarning
             )
 
-        mask_binary = (self.mask > 0).astype(np.uint8) * 255
-        transform = rasterio.transform.from_bounds(
-            0,
-            0,
-            self.mask.shape[1],
-            self.mask.shape[0],
-            self.mask.shape[1],
-            self.mask.shape[0],
-        )
+            mask_binary = (self.mask > 0).astype(np.uint8) * 255
+            height, width = mask_binary.shape
 
-        with rasterio.open(
-            output_path,
-            "w",
-            driver="GTiff",
-            height=self.mask.shape[0],
-            width=self.mask.shape[1],
-            count=1,
-            dtype="uint8",
-            transform=transform,
-            compress="lzw",
-        ) as dst:
-            dst.write(mask_binary, 1)
+            if self.metadata.mpp_x > 0:
+                pixel_size_um = self.metadata.mpp_x * self.downsample_factor
+            else:
+                pixel_size_um = self.downsample_factor
+
+            pixels_per_unit = 10000.0 / pixel_size_um
+
+            profile = {
+                "driver": "GTiff",
+                "dtype": "uint8",
+                "width": width,
+                "height": height,
+                "count": 1,
+                "compress": "lzw",
+                "tiled": True,
+                "blockxsize": min(512, width),
+                "blockysize": min(512, height),
+                "BIGTIFF": "YES",
+            }
+
+            with rasterio.open(output_path, "w", **profile) as dst:
+                dst.write(mask_binary, 1)
+
+                dst.update_tags(
+                    TIFFTAG_XRESOLUTION=pixels_per_unit,
+                    TIFFTAG_YRESOLUTION=pixels_per_unit,
+                    TIFFTAG_RESOLUTIONUNIT=3,
+                    ImageDescription=f"Binary mask, pixel size: {pixel_size_um:.3f} μm/pixel, downsample: {self.downsample_factor}x",
+                )
 
     @lru_cache(maxsize=1)
     def _get_bounds(self) -> Tuple[float, float, float, float]:
@@ -454,11 +474,12 @@ class BinaryMaskAnnotation(Annotation):
             )
 
         annotation = cls(metadata=metadata)
+        annotation.downsample_factor = downsample_factor
 
         if metadata and metadata.width > 0:
             mask_width = int(metadata.width / downsample_factor)
             mask_height = int(metadata.height / downsample_factor)
-            offset_x, offset_y = 0, 0
+            offset_x, offset_y = metadata.offset_x, metadata.offset_y
         else:
             mask_width, mask_height, offset_x, offset_y = (
                 cls._calculate_optimal_dimensions(geojson, downsample_factor)
@@ -502,7 +523,11 @@ class BinaryMaskAnnotation(Annotation):
 
         if shapes:
             self.mask = rasterio.features.rasterize(
-                shapes, out_shape=self.mask.shape, fill=0, dtype=np.uint8
+                shapes,
+                out_shape=self.mask.shape,
+                fill=0,
+                dtype=np.uint8,
+                all_touched=True,
             )
 
     def _process_features_parallel(
@@ -543,7 +568,11 @@ class BinaryMaskAnnotation(Annotation):
 
         if all_shapes:
             self.mask = rasterio.features.rasterize(
-                all_shapes, out_shape=self.mask.shape, fill=0, dtype=np.uint8
+                all_shapes,
+                out_shape=self.mask.shape,
+                fill=0,
+                dtype=np.uint8,
+                all_touched=True,
             )
 
     def _process_chunk(
