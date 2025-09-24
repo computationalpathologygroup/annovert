@@ -1,0 +1,11 @@
+__pycache__
+*.egg-info
+output
+data
+rebuild.sh
+sandbox
+.DS_Store
+qupath_project
+build
+example_sandbox.py
+pip-wheel-metadata
