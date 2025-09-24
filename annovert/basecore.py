@@ -5,7 +5,7 @@ import uuid
 import re
 
 FormatType = Literal[
-    "asap", "geojson", "3dhistech", "geojson_qupath_mrxs", "binary_mask"
+    "asap", "geojson", "3dhistech", "geojson_qupath_mrxs", "binary_mask", "hamamatsu_ndpa"
 ]
 
 
@@ -92,6 +92,7 @@ class FormatDetector:
         "3dhistech": r"<annotation_meta_data",
         "geojson": r'"type"\s*:\s*"FeatureCollection"',
         "geojson_qupath_mrxs": r'"qupath_mrxs"\s*:\s*true',
+        "hamamatsu_ndpa": r"<annotations>.*<ndpviewstate>",
     }
 
     @classmethod
