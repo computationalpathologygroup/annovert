@@ -1,19 +1,29 @@
-import xml.etree.ElementTree as ET
-from pathlib import Path
-from typing import Any, Dict, Optional, Union, List, Tuple
 import logging
-from tqdm import tqdm
+import xml.etree.ElementTree as ET
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from functools import lru_cache
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple, Union
 
-from .basecore import Annotation, ConverterConfig, FormatType, ImageMetadata
+from tqdm import tqdm
+
 from .aggregation import AnnotationGrouper, HistechAggregator
-from .formats import (
-    ASAPAnnotation,
-    GeoJSONAnnotation,
-    HistechAnnotation,
-    BinaryMaskAnnotation,
-    HamamatsuNDPA,
+from .basecore import (Annotation, ConverterConfig, Format, FormatType,
+                       ImageMetadata, Region)
+from .formats import (ASAPAnnotation, BinaryMaskAnnotation, GeoJSONAnnotation,
+                      HamamatsuNDPA, HistechAnnotation)
+
+logger = logging.getLogger(__name__)
+
+_SLIDE_EXTENSIONS = (
+    ".mrxs",
+    ".svs",
+    ".ndpi",
+    ".vms",
+    ".vmu",
+    ".scn",
+    ".tif",
+    ".tiff",
 )
 
 
@@ -39,40 +49,40 @@ class ConversionLogger:
 
 class FormatResolver:
     _EXTENSION_MAPPING = {
-        ".geojson": "geojson",
-        ".json": "geojson",
+        ".geojson": Format.GEOJSON,
+        ".json": Format.GEOJSON,
         ".xml": None,
-        ".ndpa": "hamamatsu_ndpa",
-        ".tif": "binary_mask",
-        ".tiff": "binary_mask",
+        ".ndpa": Format.HAMAMATSU_NDPA,
+        ".tif": Format.BINARY_MASK,
+        ".tiff": Format.BINARY_MASK,
     }
 
     @classmethod
-    def detect_from_path(cls, file_path: Path) -> FormatType:
+    def detect_from_path(cls, file_path: Path) -> Format:
         suffix = file_path.suffix.lower()
 
-        if suffix in [".geojson", ".json"]:
+        if suffix in (".geojson", ".json"):
             return cls._detect_json_format(file_path)
         elif suffix == ".xml":
             return cls._detect_xml_format(file_path)
         elif suffix == ".ndpa":
-            return "hamamatsu_ndpa"
-        elif suffix in [".tif", ".tiff"]:
-            return "binary_mask"
+            return Format.HAMAMATSU_NDPA
+        elif suffix in (".tif", ".tiff"):
+            return Format.BINARY_MASK
 
         raise ValueError(f"Cannot determine annotation format from file: {file_path}")
 
     @classmethod
-    def _detect_json_format(cls, file_path: Path) -> FormatType:
+    def _detect_json_format(cls, file_path: Path) -> Format:
         with open(file_path, "r") as f:
             content = f.read(4096)
         try:
             format_type = Annotation.detect_format(content)
-            if format_type in ["geojson", "geojson_qupath_mrxs"]:
+            if format_type in (Format.GEOJSON, Format.GEOJSON_QUPATH_MRXS):
                 return format_type
         except ValueError:
             pass
-        return "geojson"
+        return Format.GEOJSON
 
     @classmethod
     def _detect_xml_format(cls, file_path: Path) -> FormatType:
@@ -84,15 +94,15 @@ class FormatResolver:
             return cls._detect_xml_by_root_tag(content)
 
     @classmethod
-    def _detect_xml_by_root_tag(cls, content: str) -> FormatType:
+    def _detect_xml_by_root_tag(cls, content: str) -> Format:
         try:
             root = ET.fromstring(content)
             if root.tag == "ASAP_Annotations":
-                return "asap"
+                return Format.ASAP
             elif root.tag == "annotation_meta_data":
-                return "3dhistech"
+                return Format.HISTECH_3D
             elif root.tag == "annotations":
-                return "hamamatsu_ndpa"
+                return Format.HAMAMATSU_NDPA
             else:
                 raise ValueError(
                     f"Unknown XML annotation format with root tag: {root.tag}"
@@ -105,12 +115,12 @@ class AnnotationLoader:
     @staticmethod
     def load(input_path: Path, source_format: FormatType) -> Any:
         loaders = {
-            "geojson_qupath_mrxs": AnnotationLoader._load_qupath_geojson,
-            "asap": lambda p: ASAPAnnotation.from_file(p),
-            "geojson": lambda p: GeoJSONAnnotation.from_file(p),
-            "3dhistech": lambda p: HistechAnnotation.from_file(p),
-            "binary_mask": lambda p: BinaryMaskAnnotation.from_file(p),
-            "hamamatsu_ndpa": lambda p: HamamatsuNDPA.from_file(p),
+            Format.GEOJSON_QUPATH_MRXS: AnnotationLoader._load_qupath_geojson,
+            Format.ASAP: lambda p: ASAPAnnotation.from_file(p),
+            Format.GEOJSON: lambda p: GeoJSONAnnotation.from_file(p),
+            Format.HISTECH_3D: lambda p: HistechAnnotation.from_file(p),
+            Format.BINARY_MASK: lambda p: BinaryMaskAnnotation.from_file(p),
+            Format.HAMAMATSU_NDPA: lambda p: HamamatsuNDPA.from_file(p),
         }
 
         loader = loaders.get(source_format)
@@ -132,7 +142,10 @@ class MetadataLoader:
     def load(
         image_path: Optional[Union[str, Path]], target_format: FormatType
     ) -> Optional[ImageMetadata]:
-        if target_format in ["geojson_qupath_mrxs", "binary_mask"] and image_path:
+        if (
+            target_format in (Format.GEOJSON_QUPATH_MRXS, Format.BINARY_MASK)
+            and image_path
+        ):
             from .image_reader import ImageReader
 
             try:
@@ -148,34 +161,34 @@ class ConversionEngine:
 
     def _build_converter_map(self) -> Dict[Tuple[str, str], callable]:
         return {
-            ("ASAPAnnotation", "asap"): lambda a, t, m, d: a,
-            ("ASAPAnnotation", "geojson"): lambda a, t, m, d: a.to_geojson(),
-            ("ASAPAnnotation", "geojson_qupath_mrxs"): self._asap_to_qupath,
-            ("ASAPAnnotation", "binary_mask"): self._asap_to_binary_mask,
-            ("ASAPAnnotation", "hamamatsu_ndpa"): self._asap_to_ndpa,
-            ("GeoJSONAnnotation", "asap"): lambda a, t, m, d: a.to_asap(),
-            ("GeoJSONAnnotation", "geojson"): lambda a, t, m, d: a,
-            ("GeoJSONAnnotation", "geojson_qupath_mrxs"): self._geojson_to_qupath,
-            ("GeoJSONAnnotation", "binary_mask"): self._geojson_to_binary_mask,
-            ("GeoJSONAnnotation", "hamamatsu_ndpa"): self._geojson_to_ndpa,
-            ("HistechAnnotation", "asap"): lambda a, t, m, d: a.to_asap(),
-            ("HistechAnnotation", "geojson"): lambda a, t, m, d: a.to_geojson(),
-            ("HistechAnnotation", "geojson_qupath_mrxs"): self._histech_to_qupath,
-            ("HistechAnnotation", "binary_mask"): self._histech_to_binary_mask,
-            ("HistechAnnotation", "hamamatsu_ndpa"): self._histech_to_ndpa,
-            ("BinaryMaskAnnotation", "asap"): lambda a, t, m, d: a.to_asap(),
-            ("BinaryMaskAnnotation", "geojson"): lambda a, t, m, d: a.to_geojson(),
+            ("ASAPAnnotation", Format.ASAP): lambda a, t, m, d: a,
+            ("ASAPAnnotation", Format.GEOJSON): lambda a, t, m, d: a.to_geojson(),
+            ("ASAPAnnotation", Format.GEOJSON_QUPATH_MRXS): self._asap_to_qupath,
+            ("ASAPAnnotation", Format.BINARY_MASK): self._asap_to_binary_mask,
+            ("ASAPAnnotation", Format.HAMAMATSU_NDPA): self._asap_to_ndpa,
+            ("GeoJSONAnnotation", Format.ASAP): lambda a, t, m, d: a.to_asap(),
+            ("GeoJSONAnnotation", Format.GEOJSON): lambda a, t, m, d: a,
+            ("GeoJSONAnnotation", Format.GEOJSON_QUPATH_MRXS): self._geojson_to_qupath,
+            ("GeoJSONAnnotation", Format.BINARY_MASK): self._geojson_to_binary_mask,
+            ("GeoJSONAnnotation", Format.HAMAMATSU_NDPA): self._geojson_to_ndpa,
+            ("HistechAnnotation", Format.ASAP): lambda a, t, m, d: a.to_asap(),
+            ("HistechAnnotation", Format.GEOJSON): lambda a, t, m, d: a.to_geojson(),
+            ("HistechAnnotation", Format.GEOJSON_QUPATH_MRXS): self._histech_to_qupath,
+            ("HistechAnnotation", Format.BINARY_MASK): self._histech_to_binary_mask,
+            ("HistechAnnotation", Format.HAMAMATSU_NDPA): self._histech_to_ndpa,
+            ("BinaryMaskAnnotation", Format.ASAP): lambda a, t, m, d: a.to_asap(),
+            ("BinaryMaskAnnotation", Format.GEOJSON): lambda a, t, m, d: a.to_geojson(),
             (
                 "BinaryMaskAnnotation",
-                "geojson_qupath_mrxs",
+                Format.GEOJSON_QUPATH_MRXS,
             ): self._binary_mask_to_qupath,
-            ("BinaryMaskAnnotation", "binary_mask"): lambda a, t, m, d: a,
-            ("BinaryMaskAnnotation", "hamamatsu_ndpa"): self._binary_mask_to_ndpa,
-            ("HamamatsuNDPA", "asap"): lambda a, t, m, d: a.to_asap(),
-            ("HamamatsuNDPA", "geojson"): lambda a, t, m, d: a.to_geojson(),
-            ("HamamatsuNDPA", "geojson_qupath_mrxs"): self._ndpa_to_qupath,
-            ("HamamatsuNDPA", "binary_mask"): self._ndpa_to_binary_mask,
-            ("HamamatsuNDPA", "hamamatsu_ndpa"): lambda a, t, m, d: a,
+            ("BinaryMaskAnnotation", Format.BINARY_MASK): lambda a, t, m, d: a,
+            ("BinaryMaskAnnotation", Format.HAMAMATSU_NDPA): self._binary_mask_to_ndpa,
+            ("HamamatsuNDPA", Format.ASAP): lambda a, t, m, d: a.to_asap(),
+            ("HamamatsuNDPA", Format.GEOJSON): lambda a, t, m, d: a.to_geojson(),
+            ("HamamatsuNDPA", Format.GEOJSON_QUPATH_MRXS): self._ndpa_to_qupath,
+            ("HamamatsuNDPA", Format.BINARY_MASK): self._ndpa_to_binary_mask,
+            ("HamamatsuNDPA", Format.HAMAMATSU_NDPA): lambda a, t, m, d: a,
         }
 
     def convert(
@@ -206,13 +219,13 @@ class ConversionEngine:
     def _convert_qupath_geojson(
         self, annotation, target_format: FormatType, metadata, downsample_factor: float
     ) -> Any:
-        if target_format == "asap":
+        if target_format == Format.ASAP:
             return annotation.to_standard_geojson().to_asap()
-        elif target_format == "geojson":
+        elif target_format == Format.GEOJSON:
             return annotation.to_standard_geojson()
-        elif target_format == "geojson_qupath_mrxs":
+        elif target_format == Format.GEOJSON_QUPATH_MRXS:
             return annotation
-        elif target_format == "binary_mask":
+        elif target_format == Format.BINARY_MASK:
             standard_geojson = annotation.to_standard_geojson()
             return BinaryMaskAnnotation.from_geojson(
                 standard_geojson, metadata, downsample_factor
@@ -278,30 +291,29 @@ class ConversionEngine:
     def _asap_to_ndpa(self, annotation, target_format, metadata, downsample_factor):
         base_geojson = annotation.to_geojson()
         ndpa = HamamatsuNDPA()
-        
+
         # Try to find corresponding NDPI image file to get pixel size parameters
         # This enables proper coordinate conversion from pixels back to nanometers
         self._try_load_ndpi_parameters_for_asap(ndpa, metadata)
-        
+
         # Convert GeoJSON features to NDPA regions
         for feature in base_geojson.features:
-            from .basecore import Region
             properties = feature.get("properties", {})
-            
+
             # Map region types from ASAP/GeoJSON to NDPA format
             original_type = properties.get("type", "Polygon")
             if original_type == "Polygon":
                 ndpa_region_type = "FREEHAND"  # NDPA uses FREEHAND for closed polygons
             else:
                 ndpa_region_type = original_type
-            
+
             region = Region(
                 name=properties.get("name", "Region"),
                 region_type=ndpa_region_type,
                 color=properties.get("color", "#F4FA58"),
-                group=properties.get("group")
+                group=properties.get("group"),
             )
-            
+
             geometry = feature["geometry"]
             if geometry["type"] == "Polygon":
                 coords = geometry["coordinates"][0]
@@ -314,81 +326,59 @@ class ConversionEngine:
             elif geometry["type"] == "Point":
                 x, y = geometry["coordinates"]
                 region.add_coordinate(x, y)
-                
+
             ndpa.add_region(region)
-            
+
         # Convert pixel coordinates to nanometers using loaded NDPI parameters
-        # NOTE: Skip coordinate conversion for now since ASAP and NDPI coordinate systems
-        # may be in different reference frames. Just preserve the coordinates as-is.
-        if False:  # Disabled coordinate conversion
-            from .basecore import Coordinate
-            for region in ndpa.regions:
-                # Convert each coordinate from pixels to nanometers
-                converted_coords = []
-                for coord in region.coordinates:
-                    # Handle Coordinate objects with .x and .y attributes
-                    if hasattr(coord, 'x') and hasattr(coord, 'y'):
-                        x_pixel, y_pixel = coord.x, coord.y
-                    elif isinstance(coord, (list, tuple)) and len(coord) >= 2:
-                        x_pixel, y_pixel = coord[0], coord[1]
-                    else:
-                        print(f"Warning: unexpected coordinate format: {coord}")
-                        continue
-                    
-                    x_nm = x_pixel * ndpa.px_nm
-                    y_nm = y_pixel * ndpa.py_nm
-                    # Convert back to Coordinate objects for XML generation
-                    converted_coords.append(Coordinate(x=x_nm, y=y_nm))
-                region.coordinates = converted_coords
-        
+        # (coordinate conversion disabled: ASAP and NDPI coordinate systems differ)
         return ndpa
-    
+
     def _try_load_ndpi_parameters_for_asap(self, ndpa, metadata):
         """
         Try to find corresponding NDPI file to load pixel size parameters
         for proper coordinate conversion from pixels to nanometers.
         """
-        from pathlib import Path
-        
         # Check if we have a source file in metadata
         source_file = None
         if isinstance(metadata, dict):
-            source_file = metadata.get('source_file')
-        
+            source_file = metadata.get("source_file")
+
         if not source_file:
             return  # Can't find corresponding image
-            
+
         source_path = Path(source_file)
         base_name = source_path.stem
-        
+
         # Look for corresponding NDPI file
         # Common patterns: file.xml -> file.ndpi or file.ndpi.ndpa
         search_dir = source_path.parent
-        
+
         # Try different naming patterns
         possible_ndpi_files = [
             search_dir / f"{base_name}.ndpi",
-            search_dir / base_name.replace('.xml', '.ndpi'),
+            search_dir / base_name.replace(".xml", ".ndpi"),
         ]
-        
+
         # Also search for NDPI files in the same directory
         for ndpi_file in search_dir.glob("*.ndpi"):
             # Check if base names match (ignoring extensions)
             ndpi_base = ndpi_file.stem
             if ndpi_base in base_name or base_name in ndpi_base:
                 possible_ndpi_files.append(ndpi_file)
-        
+
         for ndpi_file in possible_ndpi_files:
             if ndpi_file.exists():
                 try:
                     ndpa._load_ndpi_parameters(str(ndpi_file))
-                    print(f"Loaded NDPI parameters from: {ndpi_file}")
+                    logger.debug(f"Loaded NDPI parameters from: {ndpi_file}")
                     return
                 except Exception as e:
-                    print(f"Failed to load NDPI parameters from {ndpi_file}: {e}")
+                    logger.warning(
+                        f"Failed to load NDPI parameters from {ndpi_file}: {e}"
+                    )
                     continue
-        
-        print("Warning: Could not find corresponding NDPI file for coordinate conversion")
+
+        logger.debug("Could not find corresponding NDPI file for coordinate conversion")
         # Set default parameters if no NDPI found
         ndpa.pixel_size_x = 227.0
         ndpa.pixel_size_y = 227.0
@@ -396,15 +386,14 @@ class ConversionEngine:
     def _geojson_to_ndpa(self, annotation, target_format, metadata, downsample_factor):
         ndpa = HamamatsuNDPA()
         for feature in annotation.features:
-            from .basecore import Region
             properties = feature.get("properties", {})
             region = Region(
                 name=properties.get("name", "Region"),
                 region_type=properties.get("type", "Polygon"),
                 color=properties.get("color", "#F4FA58"),
-                group=properties.get("group")
+                group=properties.get("group"),
             )
-            
+
             geometry = feature["geometry"]
             if geometry["type"] == "Polygon":
                 coords = geometry["coordinates"][0]
@@ -417,26 +406,37 @@ class ConversionEngine:
             elif geometry["type"] == "Point":
                 x, y = geometry["coordinates"]
                 region.add_coordinate(x, y)
-                
+
             ndpa.add_region(region)
         return ndpa
 
     def _histech_to_ndpa(self, annotation, target_format, metadata, downsample_factor):
         base_geojson = annotation.to_geojson()
-        return self._geojson_to_ndpa(base_geojson, target_format, metadata, downsample_factor)
+        return self._geojson_to_ndpa(
+            base_geojson, target_format, metadata, downsample_factor
+        )
 
-    def _binary_mask_to_ndpa(self, annotation, target_format, metadata, downsample_factor):
+    def _binary_mask_to_ndpa(
+        self, annotation, target_format, metadata, downsample_factor
+    ):
         base_geojson = annotation.to_geojson()
-        return self._geojson_to_ndpa(base_geojson, target_format, metadata, downsample_factor)
+        return self._geojson_to_ndpa(
+            base_geojson, target_format, metadata, downsample_factor
+        )
 
     def _ndpa_to_qupath(self, annotation, target_format, metadata, downsample_factor):
         from .qupath_geojson import QuPathMRXSGeoJSONAnnotation
+
         base_geojson = annotation.to_geojson()
         return QuPathMRXSGeoJSONAnnotation.from_geojson(base_geojson, metadata)
 
-    def _ndpa_to_binary_mask(self, annotation, target_format, metadata, downsample_factor):
+    def _ndpa_to_binary_mask(
+        self, annotation, target_format, metadata, downsample_factor
+    ):
         base_geojson = annotation.to_geojson()
-        return BinaryMaskAnnotation.from_geojson(base_geojson, metadata, downsample_factor)
+        return BinaryMaskAnnotation.from_geojson(
+            base_geojson, metadata, downsample_factor
+        )
 
 
 class FileProcessor:
@@ -457,7 +457,7 @@ class FileProcessor:
     ) -> Dict[str, Any]:
         try:
             curr_source_format = self._resolve_source_format(input_file, source_format)
-            effective_target_format = target_format or "geojson"
+            effective_target_format = target_format or Format.GEOJSON
 
             output_suffix = self._get_output_suffix(effective_target_format)
             output_file = output_dir / f"{input_file.stem}{output_suffix}"
@@ -507,12 +507,12 @@ class FileProcessor:
     @lru_cache(maxsize=100)
     def _get_output_suffix(self, target_format: FormatType) -> str:
         suffixes = {
-            "asap": ".xml",
-            "binary_mask": ".png",
-            "3dhistech": ".xml",
-            "geojson": ".geojson",
-            "geojson_qupath_mrxs": ".geojson",
-            "hamamatsu_ndpa": ".ndpa",
+            Format.ASAP: ".xml",
+            Format.BINARY_MASK: ".png",
+            Format.HISTECH_3D: ".xml",
+            Format.GEOJSON: ".geojson",
+            Format.GEOJSON_QUPATH_MRXS: ".geojson",
+            Format.HAMAMATSU_NDPA: ".ndpa",
         }
         return suffixes.get(target_format, ".geojson")
 
@@ -523,20 +523,13 @@ class FileProcessor:
         target_format: FormatType,
         unmatched_annotations: List[str],
     ) -> Optional[Path]:
-        if target_format not in ["geojson_qupath_mrxs", "binary_mask"] or not image_dir:
+        if (
+            target_format not in (Format.GEOJSON_QUPATH_MRXS, Format.BINARY_MASK)
+            or not image_dir
+        ):
             return None
 
-        slide_extensions = [
-            ".mrxs",
-            ".svs",
-            ".ndpi",
-            ".vms",
-            ".vmu",
-            ".scn",
-            ".tif",
-            ".tiff",
-        ]
-        for ext in slide_extensions:
+        for ext in _SLIDE_EXTENSIONS:
             candidate = image_dir / f"{input_file.stem}{ext}"
             if candidate.exists():
                 return candidate
@@ -571,15 +564,6 @@ class Annovert:
 
         annotation = AnnotationLoader.load(input_path, source_format)
         metadata = MetadataLoader.load(image_path, target_format)
-        
-        # Add source file information to metadata for coordinate conversion
-        if metadata is None:
-            metadata = {}
-        if not isinstance(metadata, dict):
-            # Convert ImageMetadata to dict and add source_file
-            metadata = {"source_file": str(input_path)}
-        else:
-            metadata["source_file"] = str(input_path)
 
         self.logger.info(f"Converting: {source_format} → {target_format}")
         result = self.engine.convert(
@@ -630,16 +614,16 @@ class Annovert:
 
     def _infer_format_from_extension(self, output_path: Path) -> FormatType:
         suffix = output_path.suffix.lower()
-        if suffix in [".geojson", ".json"]:
+        if suffix in (".geojson", ".json"):
             return (
-                "geojson_qupath_mrxs"
+                Format.GEOJSON_QUPATH_MRXS
                 if "_qupath_mrxs" in output_path.stem
-                else "geojson"
+                else Format.GEOJSON
             )
         elif suffix == ".xml":
-            return "asap"
-        elif suffix in [".tif", ".tiff", ".png", ".jpg", ".jpeg"]:
-            return "binary_mask"
+            return Format.ASAP
+        elif suffix in (".tif", ".tiff", ".png", ".jpg", ".jpeg"):
+            return Format.BINARY_MASK
         elif self.config.default_target_format:
             return self.config.default_target_format
         raise ValueError(
@@ -672,7 +656,7 @@ class Annovert:
         detected_format = self._detect_batch_format(input_files, source_format)
 
         if (
-            detected_format == "3dhistech"
+            detected_format == Format.HISTECH_3D
             and self.config.aggregation
             and self.config.aggregation.enabled
         ):
@@ -877,7 +861,7 @@ class Annovert:
         try:
             aggregated_annotation = aggregator.aggregate_annotations(group.files)
             effective_target_format = (
-                target_format or self.config.default_target_format or "geojson"
+                target_format or self.config.default_target_format or Format.GEOJSON
             )
 
             output_suffix = self.file_processor._get_output_suffix(
@@ -903,7 +887,7 @@ class Annovert:
 
             self.results[output_name] = {
                 "input_files": [str(f) for f in group.files],
-                "source_format": "3dhistech",
+                "source_format": Format.HISTECH_3D,
                 "target_format": effective_target_format,
                 "output_path": str(output_file),
                 "aggregated": True,
@@ -921,20 +905,13 @@ class Annovert:
     def _find_slide_metadata(
         self, base_name: str, image_dir: Optional[Path], target_format: FormatType
     ) -> Optional[ImageMetadata]:
-        if target_format not in ["geojson_qupath_mrxs", "binary_mask"] or not image_dir:
+        if (
+            target_format not in (Format.GEOJSON_QUPATH_MRXS, Format.BINARY_MASK)
+            or not image_dir
+        ):
             return None
 
-        slide_extensions = [
-            ".mrxs",
-            ".svs",
-            ".ndpi",
-            ".vms",
-            ".vmu",
-            ".scn",
-            ".tif",
-            ".tiff",
-        ]
-        for ext in slide_extensions:
+        for ext in _SLIDE_EXTENSIONS:
             slide_files = list(image_dir.glob(f"*{base_name}*{ext}"))
             if slide_files:
                 return MetadataLoader.load(slide_files[0], target_format)

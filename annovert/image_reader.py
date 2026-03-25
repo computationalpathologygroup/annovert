@@ -3,6 +3,11 @@ from typing import Optional, Union
 
 from .basecore import ImageMetadata
 
+_WSI_EXTENSIONS = frozenset(
+    {".mrxs", ".svs", ".ndpi", ".vms", ".vmu", ".scn", ".bif", ".svslide"}
+)
+_TIFF_EXTENSIONS = frozenset({".tif", ".tiff"})
+
 
 class ImageReader:
     @staticmethod
@@ -79,21 +84,9 @@ class ImageReader:
     @staticmethod
     def read_image_metadata(image_path: Union[str, Path]) -> Optional[ImageMetadata]:
         image_path = Path(image_path)
-        wsi_extensions = [
-            ".mrxs",
-            ".svs",
-            ".ndpi",
-            ".vms",
-            ".vmu",
-            ".scn",
-            ".bif",
-            ".svslide",
-        ]
-        tiff_extensions = [".tif", ".tiff"]
-
-        if image_path.suffix.lower() in wsi_extensions:
+        if image_path.suffix.lower() in _WSI_EXTENSIONS:
             return ImageReader.read_mrxs_metadata(image_path)
-        elif image_path.suffix.lower() in tiff_extensions:
+        elif image_path.suffix.lower() in _TIFF_EXTENSIONS:
             return ImageReader.read_tiff_metadata(image_path)
         return None
 

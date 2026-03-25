@@ -1,12 +1,22 @@
-from pathlib import Path
-from typing import Dict, List, Literal, Optional, Tuple
-from pydantic import BaseModel, Field, ConfigDict
-import uuid
 import re
+import uuid
+from enum import Enum
+from pathlib import Path
+from typing import Dict, List, Optional, Tuple
 
-FormatType = Literal[
-    "asap", "geojson", "3dhistech", "geojson_qupath_mrxs", "binary_mask", "hamamatsu_ndpa"
-]
+from pydantic import BaseModel, ConfigDict, Field
+
+
+class Format(str, Enum):
+    ASAP = "asap"
+    GEOJSON = "geojson"
+    HISTECH_3D = "3dhistech"
+    GEOJSON_QUPATH_MRXS = "geojson_qupath_mrxs"
+    BINARY_MASK = "binary_mask"
+    HAMAMATSU_NDPA = "hamamatsu_ndpa"
+
+
+FormatType = Format  # backward-compatible alias
 
 
 class ImageMetadata(BaseModel):
@@ -96,14 +106,14 @@ class FormatDetector:
     }
 
     @classmethod
-    def detect_format(cls, content: str) -> FormatType:
+    def detect_format(cls, content: str) -> Format:
         for format_type, pattern in cls._PATTERNS.items():
             if re.search(pattern, content):
                 if format_type == "geojson" and re.search(
                     cls._PATTERNS["geojson_qupath_mrxs"], content
                 ):
-                    return "geojson_qupath_mrxs"
-                return format_type
+                    return Format.GEOJSON_QUPATH_MRXS
+                return Format(format_type)
         raise ValueError("Unknown annotation format")
 
 
@@ -112,7 +122,7 @@ class Annotation:
         self.name = name
 
     @staticmethod
-    def detect_format(content: str) -> FormatType:
+    def detect_format(content: str) -> Format:
         return FormatDetector.detect_format(content)
 
 

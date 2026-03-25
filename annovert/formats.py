@@ -1,13 +1,18 @@
 import json
+import logging
+import math
 import uuid
 import xml.etree.ElementTree as ET
-from pathlib import Path
-from typing import Any, Dict, List, Union, Optional, Tuple
 from concurrent.futures import ThreadPoolExecutor
-import numpy as np
 from functools import lru_cache
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple, Union
 
-from .basecore import Annotation, Region, ImageMetadata
+import numpy as np
+
+from .basecore import Annotation, ImageMetadata, Region
+
+logger = logging.getLogger(__name__)
 
 
 class ASAPAnnotation(Annotation):
@@ -293,6 +298,7 @@ class HistechAnnotation(Annotation):
     def to_geojson(self) -> GeoJSONAnnotation:
         return self.to_asap().to_geojson()
 
+
 class HamamatsuNDPA(Annotation):
     def __init__(self, name: str = "") -> None:
         super().__init__(name=name)
@@ -306,14 +312,19 @@ class HamamatsuNDPA(Annotation):
     def add_region(self, region: Region) -> None:
         self.regions.append(region)
 
-    def set_params(self, px_nm: float = 1, py_nm: float = 1, 
-                   xoffset_nm: float = 0, yoffset_nm: float = 0) -> None:
+    def set_params(
+        self,
+        px_nm: float = 1,
+        py_nm: float = 1,
+        xoffset_nm: float = 0,
+        yoffset_nm: float = 0,
+    ) -> None:
         """Set physical coordinate parameters for NDPA format."""
         self.px_nm = px_nm
         self.py_nm = py_nm
         self.xoffset_nm = xoffset_nm
         self.yoffset_nm = yoffset_nm
-        
+
         # Apply coordinate conversion to existing regions
         self._apply_coordinate_conversion()
 
@@ -321,13 +332,13 @@ class HamamatsuNDPA(Annotation):
         """Apply coordinate conversion to all regions using current parameters."""
         if self.px_nm is None or self.py_nm is None:
             return
-            
+
         for region in self.regions:
             region_id = region.guid
             if region_id in self._raw_coordinates:
                 # Clear existing converted coordinates
                 region.coordinates.clear()
-                
+
                 # Convert and add coordinates
                 for x_nm, y_nm in self._raw_coordinates[region_id]:
                     x_pixel, y_pixel = self.ndpacoords_to_coords(x_nm, y_nm)
@@ -337,7 +348,7 @@ class HamamatsuNDPA(Annotation):
         """Convert physical NDPA coordinates to pixel coordinates."""
         if self.px_nm is None or self.py_nm is None:
             return x, y
-        
+
         x_pixel = (x - (self.xoffset_nm or 0)) / self.px_nm
         y_pixel = (y - (self.yoffset_nm or 0)) / self.py_nm
         return x_pixel, y_pixel
@@ -346,7 +357,7 @@ class HamamatsuNDPA(Annotation):
         """Convert pixel coordinates to physical NDPA coordinates."""
         if self.px_nm is None or self.py_nm is None:
             return x, y
-            
+
         x_physical = x * self.px_nm + (self.xoffset_nm or 0)
         y_physical = y * self.py_nm + (self.yoffset_nm or 0)
         return x_physical, y_physical
@@ -356,25 +367,31 @@ class HamamatsuNDPA(Annotation):
         """Parse NDPA XML content and create HamamatsuNDPA instance."""
         annotation = HamamatsuNDPA()
         root = ET.fromstring(xml_string)
-        
+
         # Process all ndpviewstate nodes
-        nodes = root.findall('ndpviewstate')
-        
+        nodes = root.findall("ndpviewstate")
+
         for ndpviewstate_node in nodes:
             # Get annotation metadata
-            title_elem = ndpviewstate_node.find('title')
-            details_elem = ndpviewstate_node.find('details')
-            
-            annotation_name = title_elem.text if title_elem is not None and title_elem.text else ""
-            class_name = details_elem.text if details_elem is not None and details_elem.text else ""
-            
+            title_elem = ndpviewstate_node.find("title")
+            details_elem = ndpviewstate_node.find("details")
+
+            annotation_name = (
+                title_elem.text if title_elem is not None and title_elem.text else ""
+            )
+            class_name = (
+                details_elem.text
+                if details_elem is not None and details_elem.text
+                else ""
+            )
+
             # Process annotation nodes within this ndpviewstate
-            for annotation_node in ndpviewstate_node.findall('annotation'):
-                annotation_type = annotation_node.get('type', '').upper()
-                color = annotation_node.get('color', '#F4FA58')
-                
+            for annotation_node in ndpviewstate_node.findall("annotation"):
+                annotation_type = annotation_node.get("type", "").upper()
+                color = annotation_node.get("color", "#F4FA58")
+
                 # Convert BGR color format if needed
-                if color and not color.startswith('#'):
+                if color and not color.startswith("#"):
                     try:
                         color_int = int(color, 16) if isinstance(color, str) else color
                         # Convert BGR to RGB hex
@@ -383,115 +400,123 @@ class HamamatsuNDPA(Annotation):
                         r = color_int & 0xFF
                         color = f"#{r:02x}{g:02x}{b:02x}"
                     except (ValueError, TypeError):
-                        color = '#F4FA58'
-                
+                        color = "#F4FA58"
+
                 region = Region(
                     name=annotation_name or class_name or f"Region_{annotation_type}",
-                    region_type="Polygon" if annotation_type == "FREEHAND" else annotation_type,
+                    region_type="Polygon"
+                    if annotation_type == "FREEHAND"
+                    else annotation_type,
                     color=color,
-                    group=class_name if class_name and class_name != annotation_name else None
+                    group=class_name
+                    if class_name and class_name != annotation_name
+                    else None,
                 )
-                
+
                 # Store raw coordinates for later conversion
                 raw_coords = []
-                
+
                 # Parse coordinates based on annotation type
                 if annotation_type == "FREEHAND":
-                    pointlist_node = annotation_node.find('pointlist')
+                    pointlist_node = annotation_node.find("pointlist")
                     if pointlist_node is not None:
-                        for point_node in pointlist_node.findall('point'):
-                            x_elem = point_node.find('x')
-                            y_elem = point_node.find('y')
+                        for point_node in pointlist_node.findall("point"):
+                            x_elem = point_node.find("x")
+                            y_elem = point_node.find("y")
                             if x_elem is not None and y_elem is not None:
                                 x = float(x_elem.text)
                                 y = float(y_elem.text)
                                 raw_coords.append((x, y))
-                
+
                 elif annotation_type == "CIRCLE":
-                    x_elem = annotation_node.find('x')
-                    y_elem = annotation_node.find('y')
-                    radius_elem = annotation_node.find('radius')
-                    
+                    x_elem = annotation_node.find("x")
+                    y_elem = annotation_node.find("y")
+                    radius_elem = annotation_node.find("radius")
+
                     if all(elem is not None for elem in [x_elem, y_elem, radius_elem]):
                         x = float(x_elem.text)
                         y = float(y_elem.text)
                         radius = float(radius_elem.text)
-                        
+
                         # Generate circle points in raw coordinates
-                        import math
                         num_points = 50
                         for i in range(num_points):
                             angle = 2 * math.pi * i / num_points
                             circle_x = x + radius * math.cos(angle)
                             circle_y = y + radius * math.sin(angle)
                             raw_coords.append((circle_x, circle_y))
-                
+
                 elif annotation_type == "PIN":
-                    x_elem = annotation_node.find('x')
-                    y_elem = annotation_node.find('y')
-                    
+                    x_elem = annotation_node.find("x")
+                    y_elem = annotation_node.find("y")
+
                     if x_elem is not None and y_elem is not None:
                         x = float(x_elem.text)
                         y = float(y_elem.text)
                         raw_coords.append((x, y))
                         region.region_type = "Point"
-                
+
                 elif annotation_type == "LINEARMEASURE":
-                    x1_elem = annotation_node.find('x1')
-                    y1_elem = annotation_node.find('y1')
-                    x2_elem = annotation_node.find('x2')
-                    y2_elem = annotation_node.find('y2')
-                    
-                    if all(elem is not None for elem in [x1_elem, y1_elem, x2_elem, y2_elem]):
+                    x1_elem = annotation_node.find("x1")
+                    y1_elem = annotation_node.find("y1")
+                    x2_elem = annotation_node.find("x2")
+                    y2_elem = annotation_node.find("y2")
+
+                    if all(
+                        elem is not None
+                        for elem in [x1_elem, y1_elem, x2_elem, y2_elem]
+                    ):
                         x1, y1 = float(x1_elem.text), float(y1_elem.text)
                         x2, y2 = float(x2_elem.text), float(y2_elem.text)
-                        
+
                         raw_coords.append((x1, y1))
                         raw_coords.append((x2, y2))
                         region.region_type = "LineString"
-                
+
                 # Store raw coordinates and add region if it has coordinates
                 if raw_coords:
                     annotation._raw_coordinates[region.guid] = raw_coords
                     # If parameters are available, convert coordinates immediately
                     if annotation.px_nm is not None and annotation.py_nm is not None:
                         for x_nm, y_nm in raw_coords:
-                            x_pixel, y_pixel = annotation.ndpacoords_to_coords(x_nm, y_nm)
+                            x_pixel, y_pixel = annotation.ndpacoords_to_coords(
+                                x_nm, y_nm
+                            )
                             region.add_coordinate(x_pixel, y_pixel)
                     # Always add region, even if coordinates aren't converted yet
                     annotation.add_region(region)
-        
+
         return annotation
 
     @staticmethod
     def from_file(file_path: Union[str, Path]) -> "HamamatsuNDPA":
         """Load NDPA annotation from file."""
         file_path = Path(file_path)
-        
+
         with open(file_path, "r", encoding="utf-8") as f:
             annotation = HamamatsuNDPA.from_string(f.read())
-        
+
         # Try to load NDPI parameters if corresponding NDPI file exists
         ndpi_path = None
-        if file_path.name.endswith('.ndpi.ndpa'):
+        if file_path.name.endswith(".ndpi.ndpa"):
             # Look for .ndpi file - remove .ndpa suffix
             base_name = file_path.name[:-5]  # Remove .ndpa (keeps .ndpi)
             potential_ndpi = file_path.parent / base_name
             if potential_ndpi.exists():
                 ndpi_path = potential_ndpi
-        elif file_path.name.endswith('.ndpa'):
+        elif file_path.name.endswith(".ndpa"):
             # Look for .ndpi file with same base name
             base_name = file_path.name[:-5]  # Remove .ndpa
-            potential_ndpi = file_path.parent / (base_name + '.ndpi')
+            potential_ndpi = file_path.parent / (base_name + ".ndpi")
             if potential_ndpi.exists():
                 ndpi_path = potential_ndpi
-        
+
         if ndpi_path:
             try:
                 annotation._load_ndpi_parameters(ndpi_path)
             except Exception as e:
-                print(f"Warning: Could not load NDPI parameters from {ndpi_path}: {e}")
-        
+                logger.warning(f"Could not load NDPI parameters from {ndpi_path}: {e}")
+
         return annotation
 
     def _load_ndpi_parameters(self, ndpi_path: Union[str, Path]) -> None:
@@ -499,50 +524,59 @@ class HamamatsuNDPA(Annotation):
         try:
             import tifffile
         except ImportError:
-            print("Warning: tifffile not available, cannot read NDPI parameters")
+            logger.warning("tifffile not available, cannot read NDPI parameters")
             return
-            
+
         try:
             with tifffile.TiffFile(ndpi_path) as tif:
                 # Get pixel size from resolution tags
-                if 'XResolution' in tif.pages[0].tags and 'YResolution' in tif.pages[0].tags:
+                if (
+                    "XResolution" in tif.pages[0].tags
+                    and "YResolution" in tif.pages[0].tags
+                ):
                     # Resolution is in pixels per centimeter
-                    xres = tif.pages[0].tags['XResolution'].value[0]
-                    yres = tif.pages[0].tags['YResolution'].value[0]
-                    
+                    xres = tif.pages[0].tags["XResolution"].value[0]
+                    yres = tif.pages[0].tags["YResolution"].value[0]
+
                     # Convert to nanometers per pixel
                     px_nm = (1e-2 / xres) * 1e9  # cm to nm
                     py_nm = (1e-2 / yres) * 1e9  # cm to nm
-                    
+
                     # Get image center
-                    width = tif.pages[0].tags['ImageWidth'].value
-                    height = tif.pages[0].tags['ImageLength'].value
+                    width = tif.pages[0].tags["ImageWidth"].value
+                    height = tif.pages[0].tags["ImageLength"].value
                     xcenter_nm = (width / 2) * px_nm
                     ycenter_nm = (height / 2) * py_nm
-                    
+
                     # Get slide offsets from NDPI-specific tags if available
                     xoffset_nm = 0
                     yoffset_nm = 0
-                    
-                    if hasattr(tif.pages[0], 'ndpi_tags'):
+
+                    if hasattr(tif.pages[0], "ndpi_tags"):
                         ndpi_tags = tif.pages[0].ndpi_tags
-                        if 'XOffsetFromSlideCenter' in ndpi_tags:
-                            xoffset_nm = ndpi_tags['XOffsetFromSlideCenter'] - xcenter_nm
-                        if 'YOffsetFromSlideCenter' in ndpi_tags:
-                            yoffset_nm = ndpi_tags['YOffsetFromSlideCenter'] - ycenter_nm
-                    
+                        if "XOffsetFromSlideCenter" in ndpi_tags:
+                            xoffset_nm = (
+                                ndpi_tags["XOffsetFromSlideCenter"] - xcenter_nm
+                            )
+                        if "YOffsetFromSlideCenter" in ndpi_tags:
+                            yoffset_nm = (
+                                ndpi_tags["YOffsetFromSlideCenter"] - ycenter_nm
+                            )
+
                     # Set the parameters
                     self.set_params(px_nm, py_nm, xoffset_nm, yoffset_nm)
-                    print(f"Loaded NDPI parameters: px_nm={px_nm:.2f}, py_nm={py_nm:.2f}")
+                    logger.debug(
+                        f"Loaded NDPI parameters: px_nm={px_nm:.2f}, py_nm={py_nm:.2f}"
+                    )
                 else:
-                    print("Warning: Could not find resolution tags in NDPI file")
+                    logger.warning("Could not find resolution tags in NDPI file")
         except Exception as e:
-            print(f"Warning: Error reading NDPI file {ndpi_path}: {e}")
+            logger.warning(f"Error reading NDPI file {ndpi_path}: {e}")
 
     def _normalize_geometry_type(self, ndpa_type: str, coords_list: list) -> str:
         """Convert NDPA annotation types to GeoJSON geometry types."""
         ndpa_type_upper = ndpa_type.upper()
-        
+
         if ndpa_type_upper in ["FREEHAND", "CIRCLE"]:
             return "Polygon"
         elif ndpa_type_upper == "LINEARMEASURE":
@@ -561,14 +595,16 @@ class HamamatsuNDPA(Annotation):
     def to_geojson(self) -> "GeoJSONAnnotation":
         """Convert to GeoJSON format."""
         geojson = GeoJSONAnnotation()
-        
+
         for region in self.regions:
             if len(region.coordinates) == 0:
                 continue
-            
+
             coords_list = [coord.to_list() for coord in region.coordinates]
-            geometry_type = self._normalize_geometry_type(region.region_type, coords_list)
-            
+            geometry_type = self._normalize_geometry_type(
+                region.region_type, coords_list
+            )
+
             if geometry_type == "Polygon":
                 if len(coords_list) < 3:
                     continue
@@ -586,17 +622,17 @@ class HamamatsuNDPA(Annotation):
                 coordinates = coords_list[0]
             else:
                 continue
-            
+
             properties = {
                 "objectType": "annotation",
                 "name": region.name,
                 "type": region.region_type,
                 "source": "hamamatsu_ndpa",
             }
-            
+
             if region.group and region.group != "None":
                 properties["group"] = region.group
-            
+
             feature = {
                 "type": "Feature",
                 "id": region.guid,
@@ -604,7 +640,7 @@ class HamamatsuNDPA(Annotation):
                 "properties": properties,
             }
             geojson.features.append(feature)
-        
+
         return geojson
 
     def to_asap(self) -> ASAPAnnotation:
@@ -614,7 +650,7 @@ class HamamatsuNDPA(Annotation):
     def to_xml(self) -> str:
         """Convert back to NDPA XML format."""
         root = ET.Element("annotations")
-        
+
         for i, region in enumerate(self.regions):
             # Create ndpviewstate node with id attribute
             ndpviewstate = ET.SubElement(root, "ndpviewstate")
@@ -626,28 +662,28 @@ class HamamatsuNDPA(Annotation):
             ET.SubElement(ndpviewstate, "x").text = "0"
             ET.SubElement(ndpviewstate, "y").text = "0"
             ET.SubElement(ndpviewstate, "z").text = "0"
-            
+
             # Create annotation node
             annotation_node = ET.SubElement(ndpviewstate, "annotation")
             annotation_node.set("type", region.region_type.lower())
             annotation_node.set("displayname", f"Annotate{region.region_type}")
             annotation_node.set("color", region.color or "#F4FA58")
-            
+
             ET.SubElement(annotation_node, "measuretype").text = "0"
-            
+
             # Add coordinates based on type
             region_type_upper = region.region_type.upper()
-            
+
             if region_type_upper == "FREEHAND":
                 ET.SubElement(annotation_node, "closed").text = "1"
                 pointlist = ET.SubElement(annotation_node, "pointlist")
-                
+
                 for coord in region.coordinates:
                     point = ET.SubElement(pointlist, "point")
                     x_physical, y_physical = self.coords_to_ndpacoords(coord.x, coord.y)
                     ET.SubElement(point, "x").text = str(int(x_physical))
                     ET.SubElement(point, "y").text = str(int(y_physical))
-            
+
             elif region_type_upper == "PIN" and len(region.coordinates) == 1:
                 coord = region.coordinates[0]
                 x_physical, y_physical = self.coords_to_ndpacoords(coord.x, coord.y)
@@ -655,17 +691,17 @@ class HamamatsuNDPA(Annotation):
                 ET.SubElement(annotation_node, "y").text = str(int(y_physical))
                 ET.SubElement(annotation_node, "icon").text = "placered"
                 ET.SubElement(annotation_node, "stricon").text = "iconplacered"
-            
+
             elif region_type_upper == "LINEARMEASURE" and len(region.coordinates) == 2:
                 coord1, coord2 = region.coordinates[0], region.coordinates[1]
                 x1_physical, y1_physical = self.coords_to_ndpacoords(coord1.x, coord1.y)
                 x2_physical, y2_physical = self.coords_to_ndpacoords(coord2.x, coord2.y)
-                
+
                 ET.SubElement(annotation_node, "x1").text = str(int(x1_physical))
                 ET.SubElement(annotation_node, "y1").text = str(int(y1_physical))
                 ET.SubElement(annotation_node, "x2").text = str(int(x2_physical))
                 ET.SubElement(annotation_node, "y2").text = str(int(y2_physical))
-        
+
         # Convert to string with XML declaration
         xml_str = ET.tostring(root, encoding="utf-8").decode("utf-8")
         return '<?xml version="1.0" encoding="UTF-8"?>\n' + xml_str
@@ -712,7 +748,7 @@ class BinaryMaskAnnotation(Annotation):
         output_path = Path(output_path)
         suffix = output_path.suffix.lower()
 
-        if suffix in [".png", ".jpg", ".jpeg"]:
+        if suffix in {".png", ".jpg", ".jpeg"}:
             self._save_image_format(output_path)
         else:
             self._save_tiff_format(output_path)
@@ -730,8 +766,9 @@ class BinaryMaskAnnotation(Annotation):
 
     def _save_tiff_format(self, output_path: Path) -> None:
         try:
-            from PIL import Image
             import warnings
+
+            from PIL import Image
         except ImportError:
             raise ImportError("Pillow is required for TIFF support")
 
@@ -798,7 +835,6 @@ class BinaryMaskAnnotation(Annotation):
                 description=f"Binary mask, pixel size: {pixel_size_um:.3f} μm/pixel, downsample: {self.downsample_factor}x",
             )
 
-    @lru_cache(maxsize=1)
     def _get_bounds(self) -> Tuple[float, float, float, float]:
         if self._bounds_cache is not None:
             return self._bounds_cache
