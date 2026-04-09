@@ -6,8 +6,6 @@ __pycache__/
 # C extensions
 *.so
 
-.github
-
 # Distribution / packaging
 .Python
 build/
@@ -151,6 +149,7 @@ htmlcov/
 *.tiff
 *.tif
 *.geojson
+!tests/fixtures/*.geojson
 outputs/
 dataset/
 benchmark_output/
@@ -158,6 +157,7 @@ comparison_output/
 unsupervised_*.geojson
 output_*.geojson
 *.json
+!tests/fixtures/*.json
 *.csv
 # pixi
 #   Similar to Pipfile.lock, it is generally recommended to include pixi.lock in version control.

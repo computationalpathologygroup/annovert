@@ -1,0 +1,23 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [100.0, 100.0],
+            [200.0, 100.0],
+            [200.0, 200.0],
+            [100.0, 200.0],
+            [100.0, 100.0]
+          ]
+        ]
+      },
+      "properties": {
+        "classification": {"name": "tumor"}
+      }
+    }
+  ]
+}
