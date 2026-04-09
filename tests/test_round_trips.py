@@ -283,26 +283,26 @@ class TestBinaryMaskRoundTrips:
 
     def test_geojson_to_mask_to_geojson_iou(self) -> None:
         import shapely.geometry
+        import shapely.affinity
 
         original_geo = GeoJSONAnnotation.from_file(REAL_WORLD)
         orig_ring = _geo_rings(original_geo)[0]
-
-        # Shift polygon to a zero-origin canvas for rasterisation
         orig_poly = shapely.geometry.Polygon(orig_ring)
-        minx, miny, maxx, maxy = orig_poly.bounds
-        width = int(maxx - minx) + 2
-        height = int(maxy - miny) + 2
 
-        shifted_ring = [
-            [x - int(minx), y - int(miny)]
-            for x, y in original_geo.features[0]["geometry"]["coordinates"][0]
-        ]
-        shifted_poly = shapely.geometry.Polygon(shifted_ring)
+        # Scale down to a ~1024px canvas so memory stays manageable in CI
+        minx, miny, maxx, maxy = orig_poly.bounds
+        scale = 1024.0 / max(maxx - minx, maxy - miny)
+        scaled_poly = shapely.affinity.scale(orig_poly, xfact=scale, yfact=scale, origin=(minx, miny))
+        scaled_poly = shapely.affinity.translate(scaled_poly, xoff=-scaled_poly.bounds[0], yoff=-scaled_poly.bounds[1])
+
+        width = int(scaled_poly.bounds[2]) + 2
+        height = int(scaled_poly.bounds[3]) + 2
+        scaled_ring = list(scaled_poly.exterior.coords)
 
         shifted_geo = GeoJSONAnnotation()
         shifted_geo.features = [{
             **original_geo.features[0],
-            "geometry": {"type": "Polygon", "coordinates": [shifted_ring]},
+            "geometry": {"type": "Polygon", "coordinates": [scaled_ring]},
         }]
 
         mask = BinaryMaskAnnotation.from_geojson(
@@ -313,7 +313,7 @@ class TestBinaryMaskRoundTrips:
         assert len(geo2.features) >= 1
         recon_poly = shapely.geometry.Polygon(_geo_rings(geo2)[0])
 
-        iou = self._polygon_iou(shifted_poly, recon_poly)
+        iou = self._polygon_iou(scaled_poly, recon_poly)
         assert iou >= self._MIN_IOU, f"polygon IoU {iou:.4f} below threshold {self._MIN_IOU}"
 
     # --- Mask save/reload preserves binary content exactly ---
