@@ -1,0 +1,14 @@
+<annotations>
+  <ndpviewstate id="1">
+    <title>tumor_0</title>
+    <details>tumor</details>
+    <annotation type="FREEHAND" color="#ff0000">
+      <pointlist>
+        <point><x>100000</x><y>100000</y></point>
+        <point><x>200000</x><y>100000</y></point>
+        <point><x>200000</x><y>200000</y></point>
+        <point><x>100000</x><y>200000</y></point>
+      </pointlist>
+    </annotation>
+  </ndpviewstate>
+</annotations>

@@ -102,7 +102,7 @@ class FormatDetector:
         "3dhistech": r"<annotation_meta_data",
         "geojson": r'"type"\s*:\s*"FeatureCollection"',
         "geojson_qupath_mrxs": r'"qupath_mrxs"\s*:\s*true',
-        "hamamatsu_ndpa": r"<annotations>.*<ndpviewstate>",
+        "hamamatsu_ndpa": r"<ndpviewstate\b",
     }
 
     @classmethod

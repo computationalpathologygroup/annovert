@@ -51,8 +51,14 @@ converter.batch_process(
 
 Plain strings are accepted everywhere for backward compatibility (`"geojson_qupath_mrxs"` is equivalent to `Format.GEOJSON_QUPATH_MRXS`).
 
-### Installation from source
+### Installation
 
+Either direct from Github:
+```bash
+pip install git+https://github.com/computationalpathologygroup/annovert.git
+```
+
+or from source
 ```bash
 git clone git@github.com:computationalpathologygroup/annovert.git
 cd annovert
