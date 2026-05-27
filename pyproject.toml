@@ -7,21 +7,25 @@ name = "annovert"
 version = "0.1.0"
 description = "Convert between digital pathology annotation formats (ASAP XML, GeoJSON, 3D Histech, QuPath MRXS, Binary Masks)"
 readme = "README.md"
-requires-python = ">=3.7"
+license = { file = "LICENSE" }
+requires-python = ">=3.10"
+authors = [
+    { name = "Basic tooling team, Computational pathology group" },
+]
 
 keywords = [
     "digital pathology",
+    "computational pathology",
     "annotation",
     "format conversion",
     "ASAP",
-    "GeoJSON", 
+    "GeoJSON",
     "QuPath",
     "3D Histech",
     "MRXS",
     "binary mask",
     "segmentation",
-    "pathology",
-    "medical imaging"
+    "medical imaging",
 ]
 
 classifiers = [
@@ -30,45 +34,48 @@ classifiers = [
     "Intended Audience :: Healthcare Industry",
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.7",
-    "Programming Language :: Python :: 3.8",
-    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Topic :: Scientific/Engineering :: Medical Science Apps.",
     "Operating System :: OS Independent",
 ]
 
 dependencies = [
-    "pydantic",
-    "pillow",
-    "tqdm",
-    "rasterio",
-    "shapely", 
-    "numpy",
-    "openslide-python",
-    "openslide-bin"
+    "pydantic>=2.0",
+    "pillow>=9.0",
+    "tqdm>=4.0",
+    "rasterio>=1.3",
+    "shapely>=2.0",
+    "numpy>=1.21",
+    "openslide-python>=1.3",
+    "openslide-bin>=4.0",
 ]
 
 [project.optional-dependencies]
-core = [
-    "pydantic",
-    "tqdm",
+ndpa = [
+    "tifffile>=2022.0",
 ]
 
-binary-mask = [
-    "numpy",
-    "rasterio", 
-    "shapely",
-    "pillow",
+app = [
+    "fastapi>=0.100",
+    "uvicorn[standard]>=0.23",
 ]
 
-slides = [
-    "openslide-python",
-    "openslide-bin",
+test = [
+    "pytest>=8.0",
+    "pytest-cov>=5.0",
 ]
+
+[project.urls]
+Homepage = "https://github.com/computationalpathologygroup/annovert"
+Repository = "https://github.com/computationalpathologygroup/annovert"
+"Bug Tracker" = "https://github.com/computationalpathologygroup/annovert/issues"
 
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["annovert*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

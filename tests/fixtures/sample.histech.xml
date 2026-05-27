@@ -1,0 +1,12 @@
+<annotation_meta_data>
+  <source>
+    <region_of_interest offset_left="0" offset_top="0" width="1000" height="1000" />
+  </source>
+  <destination micrometer_per_pixel_x="0.25" micrometer_per_pixel_y="0.25" />
+  <bounding_annotation name="tumor" color_bgr="FF00FF00" guid="aaaaaaaa-0000-0000-0000-000000000001">
+    <p x="100" y="100" />
+    <p x="200" y="100" />
+    <p x="200" y="200" />
+    <p x="100" y="200" />
+  </bounding_annotation>
+</annotation_meta_data>

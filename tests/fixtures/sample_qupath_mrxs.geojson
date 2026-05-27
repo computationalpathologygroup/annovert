@@ -1,0 +1,29 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [100.0, 100.0],
+            [200.0, 100.0],
+            [200.0, 200.0],
+            [100.0, 200.0],
+            [100.0, 100.0]
+          ]
+        ]
+      },
+      "properties": {
+        "classification": {"name": "tumor"},
+        "qupath_mrxs": true,
+        "offset_x": 0,
+        "offset_y": 0,
+        "mpp_x": 0.25,
+        "mpp_y": 0.25,
+        "source_format": "mrxs"
+      }
+    }
+  ]
+}

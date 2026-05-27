@@ -1,8 +1,12 @@
 import json
-from typing import Dict, Optional, Any
+from typing import Any, Dict, Optional
 
 from .basecore import ImageMetadata
 from .formats import GeoJSONAnnotation
+
+_QUPATH_PROPERTY_KEYS = frozenset(
+    {"qupath_mrxs", "offset_x", "offset_y", "mpp_x", "mpp_y", "source_format"}
+)
 
 
 class QuPathMRXSGeoJSONAnnotation(GeoJSONAnnotation):
@@ -24,19 +28,16 @@ class QuPathMRXSGeoJSONAnnotation(GeoJSONAnnotation):
         if "geometry" in transformed and "coordinates" in transformed["geometry"]:
             transformed["geometry"] = self._transform_geometry(transformed["geometry"])
 
-        if "properties" not in transformed:
-            transformed["properties"] = {}
-
-        transformed["properties"].update(
-            {
-                "qupath_mrxs": True,
-                "offset_x": self.metadata.offset_x,
-                "offset_y": self.metadata.offset_y,
-                "mpp_x": self.metadata.mpp_x,
-                "mpp_y": self.metadata.mpp_y,
-                "source_format": "mrxs",
-            }
-        )
+        props = transformed.get("properties", {})
+        transformed["properties"] = {
+            **props,
+            "qupath_mrxs": True,
+            "offset_x": self.metadata.offset_x,
+            "offset_y": self.metadata.offset_y,
+            "mpp_x": self.metadata.mpp_x,
+            "mpp_y": self.metadata.mpp_y,
+            "source_format": "mrxs",
+        }
         return transformed
 
     def _transform_geometry(self, geometry: Dict[str, Any]) -> Dict[str, Any]:
@@ -44,26 +45,24 @@ class QuPathMRXSGeoJSONAnnotation(GeoJSONAnnotation):
         geom_type = geometry["type"]
 
         if geom_type == "Polygon":
-            transformed_coords = []
-            for ring in coords:
-                transformed_ring = [
+            new_coords = [
+                [
                     [x - self.metadata.offset_x, y - self.metadata.offset_y]
                     for x, y in ring
                 ]
-                transformed_coords.append(transformed_ring)
-            geometry["coordinates"] = transformed_coords
+                for ring in coords
+            ]
         elif geom_type == "Point":
             x, y = coords
-            geometry["coordinates"] = [
-                x - self.metadata.offset_x,
-                y - self.metadata.offset_y,
-            ]
+            new_coords = [x - self.metadata.offset_x, y - self.metadata.offset_y]
         elif geom_type == "LineString":
-            geometry["coordinates"] = [
+            new_coords = [
                 [x - self.metadata.offset_x, y - self.metadata.offset_y]
                 for x, y in coords
             ]
-        return geometry
+        else:
+            return geometry
+        return {**geometry, "coordinates": new_coords}
 
     @classmethod
     def from_geojson(
@@ -107,18 +106,11 @@ class QuPathMRXSGeoJSONAnnotation(GeoJSONAnnotation):
             )
 
         if "properties" in untransformed:
-            props_copy = untransformed["properties"].copy()
-            qupath_keys = [
-                "qupath_mrxs",
-                "offset_x",
-                "offset_y",
-                "mpp_x",
-                "mpp_y",
-                "source_format",
-            ]
-            for key in qupath_keys:
-                props_copy.pop(key, None)
-            untransformed["properties"] = props_copy
+            untransformed["properties"] = {
+                k: v
+                for k, v in untransformed["properties"].items()
+                if k not in _QUPATH_PROPERTY_KEYS
+            }
         return untransformed
 
     def _untransform_geometry(self, geometry: Dict[str, Any]) -> Dict[str, Any]:
@@ -126,26 +118,24 @@ class QuPathMRXSGeoJSONAnnotation(GeoJSONAnnotation):
         geom_type = geometry["type"]
 
         if geom_type == "Polygon":
-            untransformed_coords = []
-            for ring in coords:
-                untransformed_ring = [
+            new_coords = [
+                [
                     [x + self.metadata.offset_x, y + self.metadata.offset_y]
                     for x, y in ring
                 ]
-                untransformed_coords.append(untransformed_ring)
-            geometry["coordinates"] = untransformed_coords
+                for ring in coords
+            ]
         elif geom_type == "Point":
             x, y = coords
-            geometry["coordinates"] = [
-                x + self.metadata.offset_x,
-                y + self.metadata.offset_y,
-            ]
+            new_coords = [x + self.metadata.offset_x, y + self.metadata.offset_y]
         elif geom_type == "LineString":
-            geometry["coordinates"] = [
+            new_coords = [
                 [x + self.metadata.offset_x, y + self.metadata.offset_y]
                 for x, y in coords
             ]
-        return geometry
+        else:
+            return geometry
+        return {**geometry, "coordinates": new_coords}
 
     @staticmethod
     def from_string(json_string: str) -> "QuPathMRXSGeoJSONAnnotation":

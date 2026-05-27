@@ -1,0 +1,14 @@
+<?xml version="1.0"?>
+<ASAP_Annotations>
+    <Annotations>
+        <Annotation Name="tumor_0" Type="Polygon" PartOfGroup="tumor" Color="#F4FA58">
+            <Coordinates>
+                <Coordinate Order="0" X="100" Y="100" />
+                <Coordinate Order="1" X="200" Y="100" />
+                <Coordinate Order="2" X="200" Y="200" />
+                <Coordinate Order="3" X="100" Y="200" />
+            </Coordinates>
+        </Annotation>
+    </Annotations>
+    <AnnotationGroups />
+</ASAP_Annotations>

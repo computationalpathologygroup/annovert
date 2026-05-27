@@ -1,19 +1,20 @@
-from pathlib import Path
-from typing import Dict, List, Optional, Set, Any
-from pydantic import BaseModel
+import os
 import re
-from functools import lru_cache
 from abc import ABC, abstractmethod
+from functools import lru_cache
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Set
 
-from .basecore import Region, AggregationConfig
+from pydantic import BaseModel, ConfigDict
+
+from .basecore import AggregationConfig, Region
 
 
 class AnnotationGroup(BaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
     base_name: str
     files: List[Path]
-
-    class Config:
-        arbitrary_types_allowed = True
 
 
 class GroupingStrategy(ABC):
@@ -86,19 +87,12 @@ class PrefixGroupingStrategy(GroupingStrategy):
 
     def _find_common_prefixes(self, names: List[str]) -> Set[str]:
         prefixes: Set[str] = set()
-        for i, name1 in enumerate(names):
-            for name2 in names[i + 1 :]:
-                prefix = self._longest_common_prefix(name1, name2)
+        for i, n1 in enumerate(names):
+            for n2 in names[i + 1 :]:
+                prefix = os.path.commonprefix([n1, n2])
                 if len(prefix) > 3:
                     prefixes.add(prefix)
         return prefixes
-
-    def _longest_common_prefix(self, s1: str, s2: str) -> str:
-        min_len = min(len(s1), len(s2))
-        for i in range(min_len):
-            if s1[i] != s2[i]:
-                return s1[:i]
-        return s1[:min_len]
 
 
 class SuffixGroupingStrategy(GroupingStrategy):
@@ -244,7 +238,7 @@ class HistechAggregator:
 
     @lru_cache(maxsize=1000)
     def _extract_annotation_name_from_filename(self, filename: str) -> Optional[str]:
-        name = filename.replace(".xml", "")
+        name = Path(filename).stem
         patterns = [r" - (.+)$", r"_(.+)$"]
 
         for pattern in patterns:
